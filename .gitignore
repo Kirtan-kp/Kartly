@@ -8,5 +8,19 @@ wheels/
 
 # Virtual environments
 kartly_venv
+*_venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 .env
+
+.venv
+venv/
+.env
+.coverage
+htmlcov/
+.idea/
+.vscode/
+*.sqlite
+*.db
