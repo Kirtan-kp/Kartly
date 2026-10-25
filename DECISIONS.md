@@ -123,3 +123,15 @@ Short ADRs for the Kartly Support Agent. Status is **Accepted** unless noted. Nu
 - **Decision:** Seven weeks of milestones, each ending in something runnable, plus one week for the golden set, hardening, and README.
 - **Alternatives:** Plan without buffer.
 - **Consequences:** Intents are cut before evals if time slips.
+
+## ADR-021: One transaction per tool call, fail-closed audit, no existence oracle
+- **Context:** ADR-007 makes the gateway the only enforcement point but leaves open how a call executes and what happens when something fails.
+- **Decision:** Each call runs in its own transaction. The tool runs inside a SAVEPOINT so a failure undoes its writes, and exactly one `audit_log` row is written in the same transaction whatever the outcome. If the audit row cannot be written, the call is rolled back and the exception propagates (fail closed). Ownership is part of the query, and a foreign order and a nonexistent order return identical errors to the model; only the audit log records `not_owner` and a `cross_customer_access` security event. Unknown arguments, including `customer_id`, are validation errors. Everything written to the audit log is sanitised: size-bounded, with NUL characters, lone surrogates, NaN and huge integers removed.
+- **Alternatives:** Audit in a separate transaction (survives rollback but allows an action with no record); a caller-owned session (the caller must remember to write the audit row); an "access denied" error for foreign orders (confirms which order IDs exist).
+- **Consequences:** Rejected and failed calls are recorded too, and security events are queryable (`details->>'security_event'`). The orchestrator must handle the rare exception from `call`. Tool handlers get a savepoint, not their own commit. Verified on Postgres, where an aborted transaction and JSONB limits behave differently from SQLite.
+
+## ADR-022: Tool output is pre-computed and minimal
+- **Context:** Models mis-handle arithmetic and dates, long tool output wastes context, and tool results end up in prompts, traces, and logs.
+- **Decision:** Tools return rupee strings instead of paise, compute facts such as "delayed" in code, return only city, state, and pincode for the destination, cap lists (20 items, 5 shipments, 5 events), and length-limit third-party text such as carrier event details.
+- **Alternatives:** Return raw rows and let the model work it out; return full addresses.
+- **Consequences:** Fewer tokens and fewer model errors, less personal data in traces. Some questions will need a new tool field. The context builder (Week 3) still wraps all tool output as untrusted data.

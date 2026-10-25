@@ -12,12 +12,14 @@ dependencies = [
   "sqlalchemy>=2.0",
   "alembic>=1.13",
   "psycopg[binary]>=3.1",
+  "pydantic>=2.6",
   "pydantic-settings>=2.2",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
+  "hypothesis>=6.100",
   "ruff>=0.6",
   "mypy>=1.10",
 ]
@@ -35,7 +37,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = [".", "src"]
 extend-exclude = ["src/kartly/store/migrations/versions"]
 
 [tool.ruff.lint]

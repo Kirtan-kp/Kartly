@@ -4,7 +4,7 @@ A production-style agentic AI system for e-commerce customer support: it triages
 
 Built to show the engineering around the model: **evals, routing, cost tracking, context management, guardrails, reliability, observability, and deployment.**
 
-> Status: **Week 1 in progress** (database layer done; gateway, LLM adapter, and agent loop next).
+> Status: **Week 1 in progress** (database layer and Tool Gateway done; LLM adapter and agent loop next).
 > See `DESIGN.md` for the full design and `DECISIONS.md` for the ADR log.
 > Real eval and cost numbers will be added here as the project is built.
 
@@ -35,7 +35,7 @@ python -m kartly.store.seed --reset   # ~50 customers, ~200 orders, 8 eval fixtu
 Run the checks:
 
 ```bash
-pytest tests/unit                  # fast, in-memory SQLite
+pytest tests/unit tests/gateway_properties   # fast, in-memory SQLite
 ruff check . && ruff format --check . && mypy
 
 # Postgres tests (migration, model/migration drift, audit-log immutability):
@@ -63,6 +63,28 @@ The seed is deterministic (fixed random seed). Eight hand-crafted orders have st
 
 Orders belonging to different customers are there on purpose, for cross-customer access tests. Money is stored as integer paise; all data is synthetic.
 
+## Tool Gateway
+
+The model never touches the database. It asks for a tool call, and `kartly.gateway.ToolGateway` decides what happens:
+
+```python
+gateway = ToolGateway(session_factory)
+specs = gateway.tool_specs(allowed=["get_order", "get_tracking"])  # what the model is shown
+result = gateway.call(ctx, "get_order", {"order_id": "KRT-100001"})  # ctx = authenticated ticket
+messages.append({"role": "tool", "content": result.to_model_content()})
+```
+
+Guarantees, each covered by tests:
+
+- **Identity comes from `CallContext`, never from the model.** `customer_id` is not a tool argument, and supplying one is a validation error (and a logged security event), even if it names the real owner.
+- **Another customer's order looks nonexistent.** Ownership is part of the query, and a foreign order and a missing order produce the same error to the model. Only the audit log records the difference.
+- **Only allowed tools run.** Tools outside the routed intent's allowed set are rejected, and only allowed tools are shown to the model.
+- **One call = one transaction.** The tool runs in a SAVEPOINT, so a failure undoes its writes, and exactly one `audit_log` row is written either way. If the audit row cannot be written, the call is rolled back and the error propagates: no audit record, no action.
+- **Audit logging cannot be broken by hostile input.** Arguments are size-bounded and stripped of NUL characters, lone surrogates, NaN and huge integers, all of which Postgres JSONB rejects.
+- **Tool output is pre-computed and minimal.** Amounts are rupee strings, "delayed" is computed in code, the address is city/state/pincode only, and lists are capped.
+
+Properties are tested exhaustively over the seeded store (every order, owner vs strangers, both tools) and with Hypothesis on arbitrary arguments. See ADR-021 and ADR-022.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
@@ -87,8 +109,8 @@ kartly-agent/
     llm/                 # provider adapter, rate-limit client, retries, pricing
     context/             # context builder, summarizer, memory
     retrieval/           # chunking, hybrid search, reranker
-    gateway/             # Tool Gateway: authz, limits, idempotency, audit
-    tools/               # tool implementations over the mock store
+    gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read tools)
+    tools/               # tool implementations over the mock store         <- built (read tools)
     guards/              # injection screen, PII redaction, output validation
     store/               # DB models, migrations, seed data        <- built
     approvals/           # approval queue and decisions
@@ -117,7 +139,7 @@ Goal: one ticket works end to end with a stored trace.
 - [x] `docker-compose.yml` with Postgres (+pgvector) and Redis
 - [x] Schema and Alembic migrations for the mock store (`customers`, `orders`, `order_items`, `shipments`) and support tables (`tickets`, `messages`, `runs`, `run_steps`, `actions`, `audit_log`), with an append-only audit log enforced by database triggers
 - [x] Seed script for ~50 synthetic customers and ~200 orders in varied states, plus 8 fixture orders
-- [ ] Tool Gateway skeleton with `get_order` and `get_tracking`, including server-side `customer_id` injection and audit logging
+- [x] Tool Gateway with `get_order` and `get_tracking`, server-side `customer_id` injection, savepoint-per-call, and a fail-closed audit log
 - [ ] LLM adapter (OpenAI-compatible) with config-driven models; Ollama as first backend
 - [ ] Token counting and shadow-cost calculation from `config/models.yaml`
 - [ ] Minimal tool-calling loop with step and token caps

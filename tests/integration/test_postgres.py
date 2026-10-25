@@ -1,24 +1,14 @@
-"""Migration and constraint tests against a real Postgres.
-
-Set KARTLY_TEST_DATABASE_URL to a dedicated *test* database, for example
-postgresql+psycopg://kartly:kartly@localhost:5432/kartly_test
-These tests DROP and recreate the public schema, so the database name must contain "test".
-"""
+"""Migration and constraint tests on a real Postgres (fixtures: tests/integration/conftest.py)."""
 
 from __future__ import annotations
 
-import os
-from collections.abc import Iterator
-from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
-from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import Connection, Engine, create_engine, inspect, text
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,11 +22,10 @@ from kartly.store.models import (
     Ticket,
 )
 from kartly.store.seed import seed_mock_store
+from tests.support import FIXED_NOW, alembic_config
 
 pytestmark = pytest.mark.postgres
 
-ROOT = Path(__file__).resolve().parents[2]
-NOW = datetime(2026, 10, 23, 12, 0, 0, tzinfo=UTC)
 EXPECTED_TABLES = {
     "customers",
     "orders",
@@ -51,36 +40,6 @@ EXPECTED_TABLES = {
 }
 
 
-@pytest.fixture
-def pg_engine() -> Iterator[Engine]:
-    url = os.environ.get("KARTLY_TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("KARTLY_TEST_DATABASE_URL is not set")
-    engine = create_engine(url)
-    if "test" not in (engine.url.database or ""):
-        engine.dispose()
-        pytest.fail("refusing to run: the test database name must contain 'test'")
-    with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
-    yield engine
-    engine.dispose()
-
-
-def _alembic(conn: Connection) -> Config:
-    cfg = Config()
-    cfg.set_main_option("script_location", str(ROOT / "src/kartly/store/migrations"))
-    cfg.attributes["connection"] = conn
-    return cfg
-
-
-@pytest.fixture
-def migrated(pg_engine: Engine) -> Engine:
-    with pg_engine.begin() as conn:
-        command.upgrade(_alembic(conn), "head")
-    return pg_engine
-
-
 def test_upgrade_creates_all_tables(migrated: Engine) -> None:
     assert set(inspect(migrated).get_table_names()) >= EXPECTED_TABLES
 
@@ -93,9 +52,9 @@ def test_models_match_the_migration(migrated: Engine) -> None:
 
 def test_downgrade_removes_everything_and_upgrade_is_repeatable(pg_engine: Engine) -> None:
     with pg_engine.begin() as conn:
-        command.upgrade(_alembic(conn), "head")
+        command.upgrade(alembic_config(conn), "head")
     with pg_engine.begin() as conn:
-        command.downgrade(_alembic(conn), "base")
+        command.downgrade(alembic_config(conn), "base")
     assert EXPECTED_TABLES.isdisjoint(inspect(pg_engine).get_table_names())
     with pg_engine.connect() as conn:
         left = conn.execute(
@@ -103,7 +62,7 @@ def test_downgrade_removes_everything_and_upgrade_is_repeatable(pg_engine: Engin
         ).scalar_one()
     assert left == 0
     with pg_engine.begin() as conn:
-        command.upgrade(_alembic(conn), "head")
+        command.upgrade(alembic_config(conn), "head")
     assert set(inspect(pg_engine).get_table_names()) >= EXPECTED_TABLES
 
 
@@ -128,7 +87,7 @@ def test_audit_log_is_append_only(migrated: Engine, statement: str) -> None:
 
 def test_seed_loads_and_types_are_postgres_native(migrated: Engine) -> None:
     with Session(migrated) as session:
-        result = seed_mock_store(session, now=NOW)
+        result = seed_mock_store(session, now=FIXED_NOW)
         session.commit()
         assert result.orders == 200
         order = session.get(Order, "KRT-100001")
