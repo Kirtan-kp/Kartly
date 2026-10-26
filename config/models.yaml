@@ -1,0 +1,65 @@
+# Providers, models and reference prices. No model name appears anywhere in the code (ADR-011).
+#
+# Prices are USD per 1M tokens and are REFERENCE prices used only for shadow-cost reporting
+# (ADR-013). Real spend is $0 on a free tier or a local model. Prices change: re-check them
+# before quoting a cost number in the README.
+#
+# Hosted model lineups change too: Groq retired llama-3.1-8b-instant and llama-3.3-70b-versatile
+# for free accounts on 2026-08-16 (ADR-025). If a model starts returning HTTP 404, check Groq's
+# deprecations page and edit the `model:` line below; nothing else in the project names a model.
+
+providers:
+  ollama:
+    base_url: http://localhost:11434/v1
+    api_key_env: null              # Ollama ignores API keys
+    supports_tool_choice: false    # Ollama's OpenAI-compatible endpoint does not support it
+    timeout_s: 180                 # the first call after idle loads the model into memory
+
+  groq:
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY      # put the key in .env or your shell, never in this file
+    supports_tool_choice: true
+    timeout_s: 60
+
+models:
+  # Built from ollama/Modelfile.small so the context length is 8192. Edit the Modelfile's FROM
+  # line to use any model you have pulled; this entry then keeps working unchanged.
+  local_small:
+    provider: ollama
+    model: kartly-small
+    max_output_tokens: 1024
+    price:
+      input_per_mtok: 0.075
+      output_per_mtok: 0.30
+      note: "Priced as Groq openai/gpt-oss-20b, the nearest hosted small model (assumption)."
+
+  # gpt-oss models reason before answering. Reasoning tokens may count against the output cap
+  # (not documented) and against the free tier's tokens-per-minute limit (a third-party page
+  # reports 8,000), so keep the effort low for the small tier.
+  groq_small:
+    provider: groq
+    model: openai/gpt-oss-20b
+    max_output_tokens: 1024
+    extra_body:
+      reasoning_effort: low        # gpt-oss accepts low, medium or high (Groq API reference)
+    price:
+      input_per_mtok: 0.075
+      output_per_mtok: 0.30
+      note: "Groq models page, fetched 2026-10-26."
+
+  groq_large:
+    provider: groq
+    model: openai/gpt-oss-120b
+    max_output_tokens: 2048
+    extra_body:
+      reasoning_effort: medium
+    price:
+      input_per_mtok: 0.15
+      output_per_mtok: 0.60
+      note: "Groq models page, fetched 2026-10-26."
+
+# Roles used by routing (Week 2). The first model is the primary; the rest are the fallback
+# chain used by the resilient client (Week 5).
+roles:
+  small: [local_small, groq_small]
+  large: [groq_large, groq_small]

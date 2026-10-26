@@ -89,6 +89,27 @@ def compact_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return compacted
 
 
+def build_tool_specs(
+    tools: Iterable[Tool], allowed: Collection[str] | None = None
+) -> list[dict[str, Any]]:
+    """OpenAI-style function specs for ``tools``, limited to ``allowed`` (default: all).
+
+    Needs no database, so scripts and tests can use it directly. Order follows ``tools``.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": compact_schema(tool.args_model.model_json_schema()),
+            },
+        }
+        for tool in tools
+        if allowed is None or tool.name in allowed
+    ]
+
+
 def _describe_validation_error(exc: ValidationError) -> str:
     """A short, model-readable message that never echoes the offending input back."""
     errors = exc.errors(include_url=False, include_context=False, include_input=False)
@@ -128,18 +149,7 @@ class ToolGateway:
             unknown = sorted(set(allowed) - set(self._tools))
             if unknown:
                 raise ValueError(f"unknown tools in allowed list: {unknown}")
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": tool.description,
-                    "parameters": compact_schema(tool.args_model.model_json_schema()),
-                },
-            }
-            for name, tool in self._tools.items()
-            if allowed is None or name in allowed
-        ]
+        return build_tool_specs(self._tools.values(), allowed)
 
     def call(
         self,

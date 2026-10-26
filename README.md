@@ -4,7 +4,7 @@ A production-style agentic AI system for e-commerce customer support: it triages
 
 Built to show the engineering around the model: **evals, routing, cost tracking, context management, guardrails, reliability, observability, and deployment.**
 
-> Status: **Week 1 in progress** (database layer and Tool Gateway done; LLM adapter and agent loop next).
+> Status: **Week 1 in progress** (database layer, Tool Gateway and LLM adapter done; the agent loop is next).
 > See `DESIGN.md` for the full design and `DECISIONS.md` for the ADR log.
 > Real eval and cost numbers will be added here as the project is built.
 
@@ -85,6 +85,40 @@ Guarantees, each covered by tests:
 
 Properties are tested exhaustively over the seeded store (every order, owner vs strangers, both tools) and with Hypothesis on arbitrary arguments. See ADR-021 and ADR-022.
 
+## LLM providers
+
+Models are configured in `config/models.yaml`: providers (base URL, API-key variable, quirks), models (provider model ID, reference price), and roles (`small`, `large`) that list a fallback order. Both providers speak the OpenAI chat-completions protocol, so one client covers them.
+
+**Groq (free tier):** put your key in `.env` (never in a file you commit):
+
+```bash
+cp .env.example .env     # then edit .env and set GROQ_API_KEY=...
+```
+
+**Ollama (local):** pull a small tool-calling model, then create the `kartly-small` alias, which sets an 8k context window (Ollama's default is too small for our prompts):
+
+```bash
+ollama pull qwen2.5:3b                                  # or any model from `ollama list`
+ollama create kartly-small -f ollama/Modelfile.small    # edit FROM in the file to change the base model
+ollama ps                                               # PROCESSOR should say 100% GPU; CPU offload means it is too big for 4 GB
+```
+
+Check that each model really works before building on it. The smoke test makes three real calls (plain reply, a tool call whose arguments must pass the real tool schema, and a tool-result round trip) and prints the tokens and shadow cost of each:
+
+```bash
+python -m kartly.llm.smoke --list
+python -m kartly.llm.smoke local_small
+python -m kartly.llm.smoke groq_small
+```
+
+Exit code 0 means all three steps passed, 1 means a step failed, 2 means a configuration problem (missing key, unknown model).
+
+The first call to a local model loads it into memory and can take a minute or more (about 94 s on an RTX 3050 laptop); later calls take seconds, so run the smoke test twice before judging local latency.
+
+Hosted lineups change: Groq retired `llama-3.1-8b-instant` for free accounts in August 2026 and the small tier is now `openai/gpt-oss-20b`, a reasoning model. If a model returns HTTP 404, check the provider's deprecations page and edit the `model:` line in `config/models.yaml` (ADR-025).
+
+The client makes one request per call and never retries (ADR-023); every failure is a typed error saying whether it is retryable. Costs are **shadow costs** at the reference prices in `models.yaml`, each with a note on its source (ADR-013, ADR-024); the real spend is $0.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
@@ -106,7 +140,7 @@ kartly-agent/
     api/                 # FastAPI routes, auth
     orchestrator/        # state machine, stages, run budget
     routing/             # hard rules, classifier, model selection
-    llm/                 # provider adapter, rate-limit client, retries, pricing
+    llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
     context/             # context builder, summarizer, memory
     retrieval/           # chunking, hybrid search, reranker
     gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read tools)
@@ -140,8 +174,8 @@ Goal: one ticket works end to end with a stored trace.
 - [x] Schema and Alembic migrations for the mock store (`customers`, `orders`, `order_items`, `shipments`) and support tables (`tickets`, `messages`, `runs`, `run_steps`, `actions`, `audit_log`), with an append-only audit log enforced by database triggers
 - [x] Seed script for ~50 synthetic customers and ~200 orders in varied states, plus 8 fixture orders
 - [x] Tool Gateway with `get_order` and `get_tracking`, server-side `customer_id` injection, savepoint-per-call, and a fail-closed audit log
-- [ ] LLM adapter (OpenAI-compatible) with config-driven models; Ollama as first backend
-- [ ] Token counting and shadow-cost calculation from `config/models.yaml`
+- [x] LLM adapter (OpenAI-compatible) with config-driven models; Ollama as first backend, Groq second
+- [x] Token counting and shadow-cost calculation from `config/models.yaml`
 - [ ] Minimal tool-calling loop with step and token caps
 - [ ] `POST /v1/tickets` and `GET /v1/runs/{id}/trace`
 - [ ] First 10 hand-written eval cases and a tiny state-based grader

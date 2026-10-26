@@ -1,0 +1,14 @@
+# Small local model for the classifier and Tier 0 resolver (see config/models.yaml: local_small).
+#
+# Ollama's OpenAI-compatible API has no context-size field, so the context length must be baked
+# into a model. Without this, long prompts can be silently cut off at Ollama's default.
+#
+# Build it once:    ollama create kartly-small -f ollama/Modelfile.small
+# Check it:         ollama show kartly-small     (look for num_ctx)
+# Watch memory:     ollama ps                    (PROCESSOR should say 100% GPU on a 4 GB card;
+#                                                 if it shows a CPU split, lower num_ctx)
+#
+# Change FROM to any tool-capable model you have pulled (`ollama list`).
+FROM qwen2.5:7b
+PARAMETER num_ctx 8192
+PARAMETER temperature 0
