@@ -4,7 +4,7 @@ A production-style agentic AI system for e-commerce customer support: it triages
 
 Built to show the engineering around the model: **evals, routing, cost tracking, context management, guardrails, reliability, observability, and deployment.**
 
-> Status: **Week 1 in progress** (database layer, Tool Gateway and LLM adapter done; the agent loop is next).
+> Status: **Week 1 in progress** (database layer, Tool Gateway, LLM adapter and the bounded agent loop done; the HTTP API and the first evals are next).
 > See `DESIGN.md` for the full design and `DECISIONS.md` for the ADR log.
 > Real eval and cost numbers will be added here as the project is built.
 
@@ -119,6 +119,24 @@ Hosted lineups change: Groq retired `llama-3.1-8b-instant` for free accounts in 
 
 The client makes one request per call and never retries (ADR-023); every failure is a typed error saying whether it is retryable. Costs are **shadow costs** at the reference prices in `models.yaml`, each with a note on its source (ADR-013, ADR-024); the real spend is $0.
 
+## Agent loop
+
+`kartly.orchestrator` runs the one place an LLM makes decisions. `AgentLoop` talks to a model, lets it ask for tool calls, hands every call to the gateway, and always stops with a reason. `TicketRunner` wraps it with the database: it opens a run, stores each step as it happens, and closes the run.
+
+Limits (`RunBudget`, checked before every model call): 6 model calls, 8 tool calls, 20,000 tokens, USD 0.30 shadow cost, 120 seconds. One repair re-prompt is allowed for a broken tool call or an empty reply. A repeated identical tool call is refused and a second repeat ends the run. Any stop other than an answer (`step_limit`, `tool_limit`, `token_limit`, `cost_limit`, `timeout`, `no_progress`, `malformed_output`, `truncated_reply`, `llm_error`, `gateway_error`) escalates the ticket to a human. See ADR-026.
+
+Try it on a real ticket (needs the Quickstart database and one of the models above):
+
+```bash
+alembic upgrade head              # once after updating: adds wider cost columns (migration 0002)
+python -m kartly.orchestrator.cli --model groq_small "Where is my order KRT-100002?"
+python -m kartly.orchestrator.cli --model local_small --customer C-0002 "Where is KRT-100002?"
+```
+
+The second command asks customer C-0002 about an order that belongs to C-0001. The reply should say the order was not found, and the printed trace shows the gateway refusing the call. The command prints the stored trace (each model call and tool call with tokens, time and shadow cost) and the draft reply. Exit code 0 means a draft was produced, 1 means the ticket was escalated, 2 means a setup problem.
+
+In shadow mode nothing is sent: the draft is stored as an agent message and the ticket becomes `drafted`.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
@@ -138,7 +156,7 @@ kartly-agent/
     policy.yaml          # tiers, thresholds, caps
   src/kartly/
     api/                 # FastAPI routes, auth
-    orchestrator/        # state machine, stages, run budget
+    orchestrator/        # bounded loop, run budget, ticket runner, trace  <- built; stages come later
     routing/             # hard rules, classifier, model selection
     llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
     context/             # context builder, summarizer, memory
@@ -176,7 +194,7 @@ Goal: one ticket works end to end with a stored trace.
 - [x] Tool Gateway with `get_order` and `get_tracking`, server-side `customer_id` injection, savepoint-per-call, and a fail-closed audit log
 - [x] LLM adapter (OpenAI-compatible) with config-driven models; Ollama as first backend, Groq second
 - [x] Token counting and shadow-cost calculation from `config/models.yaml`
-- [ ] Minimal tool-calling loop with step and token caps
+- [x] Minimal tool-calling loop with step and token caps
 - [ ] `POST /v1/tickets` and `GET /v1/runs/{id}/trace`
 - [ ] First 10 hand-written eval cases and a tiny state-based grader
 - [ ] Benchmark 2-3 local models that fit 4 GB VRAM for tool-call validity (record results in `evals/runs/`)

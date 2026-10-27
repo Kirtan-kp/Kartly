@@ -8,6 +8,7 @@ database or JSON encoder rejects: NUL characters, lone surrogates, NaN/Infinity,
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 MAX_STR = 200
@@ -18,6 +19,21 @@ MAX_DEPTH = 3
 MAX_INT_BITS = 53  # larger integers are logged as a placeholder (also avoids str() limits)
 
 
+@dataclass(frozen=True)
+class Limits:
+    """Size bounds for ``safe_json``. The defaults suit audit-log arguments."""
+
+    max_str: int = MAX_STR
+    max_keys: int = MAX_KEYS
+    max_list: int = MAX_LIST
+    max_depth: int = MAX_DEPTH
+
+
+AUDIT_LIMITS = Limits()
+# Traces keep whole assistant replies and tool results, so the bounds are looser.
+TRACE_LIMITS = Limits(max_str=4000, max_keys=40, max_list=50, max_depth=6)
+
+
 def clean_str(value: str, limit: int = MAX_STR) -> str:
     """Truncate to ``limit`` characters and drop characters Postgres or UTF-8 cannot store."""
     truncated = len(value) > limit
@@ -25,7 +41,7 @@ def clean_str(value: str, limit: int = MAX_STR) -> str:
     return cleaned + "…" if truncated else cleaned
 
 
-def safe_json(value: Any, _depth: int = 0) -> Any:
+def safe_json(value: Any, limits: Limits = AUDIT_LIMITS, _depth: int = 0) -> Any:
     """Return a bounded, JSON-serialisable copy of an arbitrary value (never raises)."""
     if value is None or isinstance(value, bool):
         return value
@@ -34,14 +50,14 @@ def safe_json(value: Any, _depth: int = 0) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
     if isinstance(value, str):
-        return clean_str(value)
-    if _depth >= MAX_DEPTH:
+        return clean_str(value, limits.max_str)
+    if _depth >= limits.max_depth:
         return f"<{type(value).__name__}>"
     if isinstance(value, dict):
         return {
-            clean_str(str(key), MAX_KEY): safe_json(item, _depth + 1)
-            for key, item in list(value.items())[:MAX_KEYS]
+            clean_str(str(key), MAX_KEY): safe_json(item, limits, _depth + 1)
+            for key, item in list(value.items())[: limits.max_keys]
         }
     if isinstance(value, list | tuple):
-        return [safe_json(item, _depth + 1) for item in list(value)[:MAX_LIST]]
+        return [safe_json(item, limits, _depth + 1) for item in list(value)[: limits.max_list]]
     return f"<{type(value).__name__}>"

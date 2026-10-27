@@ -13,6 +13,7 @@ from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from kartly.llm.types import ChatResponse, ToolCall, Usage
@@ -168,3 +169,27 @@ class FakeOpenAIServer:
         self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join(timeout=5)
+
+
+def write_models_config(tmp_path: Path, base_url: str, *, key_env: str | None = None) -> Path:
+    """A models.yaml with one model, ``fake_small``, served by a FakeOpenAIServer."""
+    key_line = f"    api_key_env: {key_env}\n" if key_env else ""
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        f"""
+providers:
+  fake:
+    base_url: {base_url}
+{key_line}    supports_tool_choice: false
+    timeout_s: 5
+models:
+  fake_small:
+    provider: fake
+    model: fake-model-id
+    price: {{input_per_mtok: 0.05, output_per_mtok: 0.08}}
+roles:
+  small: [fake_small]
+""",
+        encoding="utf-8",
+    )
+    return path

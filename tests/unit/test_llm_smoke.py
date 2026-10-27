@@ -15,6 +15,7 @@ from tests.llm_support import (
     completion_payload,
     make_response,
     tool_call,
+    write_models_config,
 )
 
 
@@ -212,29 +213,6 @@ def test_the_report_is_readable_and_shows_the_shadow_cost() -> None:
 # ---------------------------------------------------------------------------- CLI
 
 
-def write_config(tmp_path: Path, base_url: str, *, key_env: str | None = None) -> Path:
-    key_line = f"    api_key_env: {key_env}\n" if key_env else ""
-    path = tmp_path / "models.yaml"
-    path.write_text(
-        f"""
-providers:
-  fake:
-    base_url: {base_url}
-{key_line}    supports_tool_choice: false
-    timeout_s: 5
-models:
-  fake_small:
-    provider: fake
-    model: fake-model-id
-    price: {{input_per_mtok: 0.05, output_per_mtok: 0.08}}
-roles:
-  small: [fake_small]
-""",
-        encoding="utf-8",
-    )
-    return path
-
-
 @pytest.fixture(autouse=True)
 def _hermetic_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kartly.llm.smoke.load_env", lambda: None)  # never read the real .env
@@ -246,7 +224,7 @@ def _hermetic_cli(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cli_end_to_end_against_a_fake_provider(
     fake_server: FakeOpenAIServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config = write_config(tmp_path, fake_server.base_url)
+    config = write_models_config(tmp_path, fake_server.base_url)
     assert main(["--config", str(config), "fake_small"]) == 0
     out = capsys.readouterr().out
     assert "[PASS] plain_completion" in out
@@ -260,7 +238,7 @@ def test_cli_exit_code_1_when_a_step_fails(
     fake_server: FakeOpenAIServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake_server.responder = lambda body: (200, completion_payload("I do not use tools."), {})
-    config = write_config(tmp_path, fake_server.base_url)
+    config = write_models_config(tmp_path, fake_server.base_url)
     assert main(["--config", str(config), "fake_small"]) == 1
     out = capsys.readouterr().out
     assert "[FAIL] plain_completion" in out
@@ -270,7 +248,7 @@ def test_cli_reports_a_provider_error_as_a_failed_step_not_a_traceback(
     fake_server: FakeOpenAIServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake_server.responder = lambda body: (401, {"error": {"message": "Invalid API Key"}}, {})
-    config = write_config(tmp_path, fake_server.base_url)
+    config = write_models_config(tmp_path, fake_server.base_url)
     assert main(["--config", str(config), "fake_small"]) == 1
     out = capsys.readouterr().out
     assert "AuthenticationError" in out and "[SKIP] tool_call" in out
@@ -279,7 +257,7 @@ def test_cli_reports_a_provider_error_as_a_failed_step_not_a_traceback(
 def test_cli_missing_key_names_the_variable_and_exits_2(
     fake_server: FakeOpenAIServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config = write_config(tmp_path, fake_server.base_url, key_env="FAKE_KEY")
+    config = write_models_config(tmp_path, fake_server.base_url, key_env="FAKE_KEY")
     assert main(["--config", str(config), "fake_small"]) == 2
     assert "FAKE_KEY" in capsys.readouterr().err
     assert fake_server.requests == []  # failed before any network call
@@ -292,7 +270,7 @@ def test_cli_sends_the_key_and_never_prints_it(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("FAKE_KEY", "gsk-test-key-123456")
-    config = write_config(tmp_path, fake_server.base_url, key_env="FAKE_KEY")
+    config = write_models_config(tmp_path, fake_server.base_url, key_env="FAKE_KEY")
     assert main(["--config", str(config), "fake_small"]) == 0
     captured = capsys.readouterr()
     assert fake_server.requests[0]["headers"]["authorization"] == "Bearer gsk-test-key-123456"
@@ -300,7 +278,7 @@ def test_cli_sends_the_key_and_never_prints_it(
 
 
 def test_cli_list(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    config = write_config(tmp_path, "http://127.0.0.1:1/v1")
+    config = write_models_config(tmp_path, "http://127.0.0.1:1/v1")
     assert main(["--config", str(config), "--list"]) == 0
     out = capsys.readouterr().out
     assert "fake_small" in out and "fake/fake-model-id" in out and "role small" in out
@@ -309,7 +287,7 @@ def test_cli_list(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 def test_cli_without_a_model_lists_and_exits_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config = write_config(tmp_path, "http://127.0.0.1:1/v1")
+    config = write_models_config(tmp_path, "http://127.0.0.1:1/v1")
     assert main(["--config", str(config)]) == 2
     assert "fake_small" in capsys.readouterr().out
 
@@ -317,7 +295,7 @@ def test_cli_without_a_model_lists_and_exits_2(
 def test_cli_unknown_model_and_bad_config_exit_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config = write_config(tmp_path, "http://127.0.0.1:1/v1")
+    config = write_models_config(tmp_path, "http://127.0.0.1:1/v1")
     assert main(["--config", str(config), "nope"]) == 2
     assert "Known models" in capsys.readouterr().err
     assert main(["--config", str(tmp_path / "missing.yaml"), "x"]) == 2
@@ -327,6 +305,8 @@ def test_cli_unknown_model_and_bad_config_exit_2(
 def test_cli_with_nothing_listening_fails_cleanly(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config = write_config(tmp_path, "http://127.0.0.1:9/v1")  # port 9 (discard): nothing there
+    config = write_models_config(
+        tmp_path, "http://127.0.0.1:9/v1"
+    )  # port 9 (discard): nothing there
     assert main(["--config", str(config), "fake_small"]) == 1
     assert "is the server running" in capsys.readouterr().out

@@ -70,3 +70,23 @@ anything = st.recursive(
 def test_any_value_becomes_strict_json(value: Any) -> None:
     dumped = json.dumps(safe_json(value), allow_nan=False)  # no exception, no NaN
     assert "\\u0000" not in dumped
+
+
+def test_trace_limits_keep_far_more_than_audit_limits() -> None:
+    from kartly.sanitize import TRACE_LIMITS
+
+    long_text = "x" * 3000
+    assert len(safe_json(long_text)) == 201  # audit default: 200 characters plus an ellipsis
+    assert safe_json(long_text, TRACE_LIMITS) == long_text
+    assert len(safe_json(list(range(100)))) == 10
+    assert len(safe_json(list(range(100)), TRACE_LIMITS)) == 50
+    deep = {"a": {"b": {"c": {"d": {"e": 1}}}}}
+    assert safe_json(deep)["a"]["b"]["c"] == "<dict>"
+    assert safe_json(deep, TRACE_LIMITS)["a"]["b"]["c"]["d"]["e"] == 1
+
+
+def test_trace_limits_still_strip_what_postgres_rejects() -> None:
+    from kartly.sanitize import TRACE_LIMITS
+
+    cleaned = safe_json({"s": "a\x00b\ud800", "n": float("nan"), "big": 10**5000}, TRACE_LIMITS)
+    assert cleaned == {"s": "ab?", "n": "nan", "big": "<big int>"}
