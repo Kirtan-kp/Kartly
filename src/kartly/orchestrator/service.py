@@ -101,6 +101,20 @@ class TicketRunner:
             session.commit()
             return ticket.id
 
+    def discard_unstarted_ticket(self, ticket_id: uuid.UUID) -> bool:
+        """Delete a ticket no run has touched (used when the system is too busy to start it)."""
+        with self._sessions() as session:
+            ticket = session.get(Ticket, ticket_id)
+            if ticket is None or ticket.status is not TicketStatus.RECEIVED or ticket.runs:
+                return False
+            session.delete(ticket)
+            session.commit()
+            return True
+
+    def find_ticket_by_external_id(self, external_id: str) -> uuid.UUID | None:
+        with self._sessions() as session:
+            return session.scalar(select(Ticket.id).where(Ticket.external_id == external_id))
+
     # -------------------------------------------------------------------------- run
 
     def run(self, ticket_id: uuid.UUID) -> RunSummary:

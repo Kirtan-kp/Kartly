@@ -137,6 +137,60 @@ The second command asks customer C-0002 about an order that belongs to C-0001. T
 
 In shadow mode nothing is sent: the draft is stored as an agent message and the ticket becomes `drafted`.
 
+## HTTP API
+
+`python -m kartly.api` serves the API on `127.0.0.1:8000` (use `--port` to change it; interactive docs at `/docs`). Every `/v1` route needs an `X-API-Key` header; `/healthz` does not.
+
+| Route | What it does |
+| --- | --- |
+| `POST /v1/tickets` | Create a ticket and start a run. Returns `202` at once; add `?wait=true` to wait for the result (`200`). |
+| `GET /v1/tickets/{id}` | Status, the message thread (the draft reply is the last agent message) and its runs. |
+| `GET /v1/runs/{id}/trace` | Every model call and tool call of a run, plus the gateway's audit rows for it. |
+| `GET /healthz` | Liveness and a database check. |
+
+One-time setup (after pulling this update, run `pip install -e ".[dev]"` again: it adds FastAPI, uvicorn and httpx2):
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # put the output in .env as KARTLY_API_KEY=...
+python -m kartly.api
+```
+
+The model comes from `KARTLY_DEFAULT_MODEL` in `.env`, or else the first model of role `small` in `config/models.yaml`. Then, from a second terminal (this works on Windows too, where `curl` quoting is awkward):
+
+```python
+import os
+
+import httpx
+
+base = "http://127.0.0.1:8000"
+headers = {"X-API-Key": os.environ["KARTLY_API_KEY"]}  # the same value as in .env
+
+ticket = httpx.post(
+    f"{base}/v1/tickets",
+    params={"wait": "true"},
+    headers=headers,
+    timeout=150,
+    json={"customer_id": "C-0001", "message": "Where is my order KRT-100002?"},
+).json()
+print(ticket["outcome"], "-", ticket["answer"])
+
+trace = httpx.get(f"{base}/v1/runs/{ticket['run_id']}/trace", headers=headers).json()
+for step in trace["steps"]:
+    print(step["idx"], step["kind"], step["name"], step["error"] or "ok")
+```
+
+(`export KARTLY_API_KEY=...` first, or `$env:KARTLY_API_KEY="..."` in PowerShell.) The equivalent with curl is `curl -X POST "http://127.0.0.1:8000/v1/tickets?wait=true" -H "X-API-Key: $KARTLY_API_KEY" -H "Content-Type: application/json" -d '{"customer_id": "C-0001", "message": "Where is my order KRT-100002?"}'`.
+
+Behaviour worth knowing (ADR-027):
+
+- **Who the customer is.** `customer_id` is asserted by the caller, the storefront backend that already authenticated the customer. It is stored once and is the only identity a tool call can use; nothing in the message or in the model's output can change it. An unknown customer is `404`.
+- **Retries are safe.** Send your own `external_id` and a repeated request returns the first ticket (`200`, `"duplicate": true`) instead of starting a second run.
+- **Load is bounded.** At most `KARTLY_MAX_WORKERS` (default 2) runs execute at once and `KARTLY_MAX_PENDING_RUNS` (default 20) may be running or waiting. Beyond that the API answers `503` with `Retry-After: 5` and creates nothing.
+- **Bad input is a plain `422`** that names the field and the rule but never repeats what you sent. A message is 1-4,000 characters; unknown fields are rejected.
+- A run that cannot answer is not an error: the ticket is `escalated` and the response says why (`stop_reason`).
+
+Not built yet: request-size limits (a reverse proxy does that, Week 7), rate limits per caller, and the Redis queue that replaces the in-process worker pool (Week 5). `/docs` is open on purpose while this is local; turn it off before exposing the service.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
@@ -155,7 +209,7 @@ kartly-agent/
     models.yaml          # model tiers, fallback chain, reference prices
     policy.yaml          # tiers, thresholds, caps
   src/kartly/
-    api/                 # FastAPI routes, auth
+    api/                 # FastAPI routes, API-key auth, bounded run pool   <- built
     orchestrator/        # bounded loop, run budget, ticket runner, trace  <- built; stages come later
     routing/             # hard rules, classifier, model selection
     llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
@@ -195,7 +249,7 @@ Goal: one ticket works end to end with a stored trace.
 - [x] LLM adapter (OpenAI-compatible) with config-driven models; Ollama as first backend, Groq second
 - [x] Token counting and shadow-cost calculation from `config/models.yaml`
 - [x] Minimal tool-calling loop with step and token caps
-- [ ] `POST /v1/tickets` and `GET /v1/runs/{id}/trace`
+- [x] `POST /v1/tickets` and `GET /v1/runs/{id}/trace` (FastAPI)
 - [ ] First 10 hand-written eval cases and a tiny state-based grader
 - [ ] Benchmark 2-3 local models that fit 4 GB VRAM for tool-call validity (record results in `evals/runs/`)
 

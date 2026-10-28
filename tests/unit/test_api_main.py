@@ -1,0 +1,165 @@
+"""``create_app_from_env``: the real wiring (settings, model registry, client, database) over a
+real HTTP model server, driven through the API."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import Engine, select
+from sqlalchemy.orm import sessionmaker
+
+from kartly.api.main import create_app_from_env, main
+from kartly.config import Settings
+from kartly.llm import LLMConfigError
+from kartly.llm.client import OpenAICompatClient
+from kartly.store.models import AuditLog
+from tests.llm_support import FakeOpenAIServer, write_models_config
+from tests.support import make_sqlite_engine, seeded_session_factory
+
+KEY = "env-api-key-123456"
+
+
+def make_settings(**values: object) -> Settings:
+    """Settings that ignore the real .env file and environment file lookups."""
+    return Settings(_env_file=None, **values)  # type: ignore[call-arg,arg-type]
+
+
+@pytest.fixture
+def wired(
+    monkeypatch: pytest.MonkeyPatch, fake_server: FakeOpenAIServer, tmp_path: Path
+) -> Iterator[Engine]:
+    engine = make_sqlite_engine()
+    seeded_session_factory(engine)
+    config = write_models_config(tmp_path, fake_server.base_url)
+
+    def settings(**overrides: object) -> Settings:
+        base: dict[str, object] = {
+            "models_config_path": str(config),
+            "api_key": KEY,
+            "max_workers": 2,
+            "max_pending_runs": 5,
+        }
+        return make_settings(**{**base, **overrides})
+
+    monkeypatch.setattr("kartly.api.main.get_settings", settings)
+    monkeypatch.setattr("kartly.api.main.load_env", lambda: None)
+    monkeypatch.setattr("kartly.api.main.make_engine", lambda: engine)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    yield engine
+    engine.dispose()
+
+
+def test_a_ticket_goes_through_http_the_model_the_gateway_and_the_database(
+    wired: Engine, fake_server: FakeOpenAIServer
+) -> None:
+    app = create_app_from_env()
+    with TestClient(app) as http:
+        response = http.post(
+            "/v1/tickets?wait=true",
+            json={"customer_id": "C-0001", "message": "Where is KRT-100002?"},
+            headers={"X-API-Key": KEY},
+        )
+        body = response.json()
+        assert response.status_code == 200, body
+        assert body["outcome"] == "drafted"
+        assert body["answer"] == "Your order KRT-100002 is in transit."
+
+        trace = http.get(f"/v1/runs/{body['run_id']}/trace", headers={"X-API-Key": KEY}).json()
+        assert trace["run"]["model_tier"] == "fake_small"  # first model of role "small"
+        assert trace["steps"][1]["output"]["data"]["order_id"] == "KRT-100002"
+
+        # Read inside the block: shutting the app down disposes the (in-memory) engine.
+        with sessionmaker(wired)() as session:
+            audit = session.scalars(select(AuditLog)).one()
+        assert audit.actor_type.value == "agent"
+
+    assert len(fake_server.requests) == 2
+
+
+def test_the_worker_limits_come_from_the_settings(wired: Engine) -> None:
+    executor = create_app_from_env().state.kartly.executor
+    assert (executor.max_workers, executor.max_pending) == (2, 5)
+
+
+def test_stopping_the_app_closes_the_model_client_and_the_database(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine
+) -> None:
+    closed: list[str] = []
+    real_close = OpenAICompatClient.close
+
+    def close_client(self: OpenAICompatClient) -> None:
+        closed.append("client")
+        real_close(self)
+
+    def dispose_engine(*_args: object, **_kwargs: object) -> None:
+        closed.append("engine")
+
+    monkeypatch.setattr(OpenAICompatClient, "close", close_client)
+    monkeypatch.setattr(wired, "dispose", dispose_engine)
+    with TestClient(create_app_from_env()):
+        assert closed == []
+    assert closed == ["client", "engine"]
+
+
+def test_the_model_can_be_chosen_by_name(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine, tmp_path: Path, fake_server: FakeOpenAIServer
+) -> None:
+    base = write_models_config(tmp_path, fake_server.base_url).read_text()
+    extra = (
+        "  fake_large:\n    provider: fake\n    model: other-id\n"
+        "    price: {input_per_mtok: 1, output_per_mtok: 2}\n"
+    )
+    config = tmp_path / "two.yaml"
+    config.write_text(base.replace("roles:", extra + "roles:"))
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(
+            models_config_path=str(config), api_key=KEY, default_model="fake_large"
+        ),
+    )
+    with TestClient(create_app_from_env()) as http:
+        body = http.post(
+            "/v1/tickets?wait=true",
+            json={"customer_id": "C-0001", "message": "hi"},
+            headers={"X-API-Key": KEY},
+        ).json()
+    assert fake_server.requests[0]["body"]["model"] == "other-id"
+    assert body["run_id"] is not None
+
+
+def test_startup_fails_clearly_without_an_api_key(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine, tmp_path: Path, fake_server: FakeOpenAIServer
+) -> None:
+    config = write_models_config(tmp_path, fake_server.base_url)
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(models_config_path=str(config), api_key=None),
+    )
+    with pytest.raises(ValueError, match="KARTLY_API_KEY is not set.*token_urlsafe"):
+        create_app_from_env()
+
+
+def test_startup_fails_clearly_without_a_model_key(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine, tmp_path: Path, fake_server: FakeOpenAIServer
+) -> None:
+    config = write_models_config(tmp_path, fake_server.base_url, key_env="FAKE_KEY")
+    monkeypatch.delenv("FAKE_KEY", raising=False)
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(models_config_path=str(config), api_key=KEY),
+    )
+    with pytest.raises(LLMConfigError, match="FAKE_KEY"):
+        create_app_from_env()
+
+
+def test_the_launcher_prints_setup_problems_instead_of_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("kartly.api.main.load_env", lambda: None)
+    monkeypatch.setattr("kartly.api.main.get_settings", lambda: make_settings(api_key=None))
+    assert main([]) == 2
+    assert "KARTLY_API_KEY" in capsys.readouterr().out

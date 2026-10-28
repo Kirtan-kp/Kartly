@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://kartly:kartly@localhost:5432/kartly"
     redis_url: str = "redis://localhost:6379/0"
     models_config_path: str = "config/models.yaml"
+    # API (KARTLY_API_KEY, KARTLY_DEFAULT_MODEL, ...). The key has no default on purpose.
+    api_key: str | None = None
+    default_model: str | None = (
+        None  # a name from models.yaml; default: first model of role "small"
+    )
+    max_workers: int = 2  # tickets processed at the same time
+    max_pending_runs: int = 20  # running + queued; beyond this the API answers 503
 
 
 @lru_cache
