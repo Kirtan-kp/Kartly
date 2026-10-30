@@ -203,10 +203,10 @@ def test_output_cap_shrinks_to_what_is_left_of_the_budget(gateway: ToolGateway) 
         prompt_tokens=2_000,
         completion_tokens=100,
     )
-    _, client = run_loop(gateway, [first, make_response("ok")], max_total_tokens=3_000)
+    _, client = run_loop(gateway, [first, make_response("ok")], max_total_tokens=3_300)
     first_cap, second_cap = (call["max_tokens"] for call in client.calls)
     assert first_cap > second_cap >= 128
-    assert second_cap <= 3_000 - 2_100  # never asks for more than the budget has left
+    assert second_cap <= 3_300 - 2_100  # never asks for more than the budget has left
 
 
 def test_cost_limit(gateway: ToolGateway) -> None:

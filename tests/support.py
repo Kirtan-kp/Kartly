@@ -9,49 +9,16 @@ from typing import Any
 
 from alembic.config import Config
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Connection, Engine, create_engine, event
+from sqlalchemy import Connection, Engine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from kartly.store.models import Base, Customer
+from kartly.store.models import Customer
 from kartly.store.seed import seed_mock_store
+from kartly.store.sqlite import make_sqlite_engine as make_sqlite_engine
 from kartly.tools.base import CallContext, RiskTier, Tool, ToolEnv, ToolError
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXED_NOW = datetime(2026, 10, 23, 12, 0, 0, tzinfo=UTC)
-
-
-def make_sqlite_engine(path: str | None = None) -> Engine:
-    """SQLite with foreign keys on and working SAVEPOINTs: in memory, or a file when ``path`` is
-    given (several threads can then use separate connections, as with Postgres).
-
-    pysqlite's default transaction handling breaks SAVEPOINT, so transaction control is handed to
-    SQLAlchemy (the documented workaround). Production uses Postgres.
-    """
-    if path is None:
-        engine = create_engine(
-            "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
-        )
-    else:
-        engine = create_engine(
-            f"sqlite:///{path}", connect_args={"check_same_thread": False, "timeout": 30}
-        )
-
-    @event.listens_for(engine, "connect")
-    def _on_connect(dbapi_connection: Any, _record: Any) -> None:
-        dbapi_connection.isolation_level = None
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
-
-    # A file database shared by several threads must take its write lock up front: with a plain
-    # (deferred) BEGIN, a reader that later writes fails at once with "database is locked".
-    begin = "BEGIN" if path is None else "BEGIN IMMEDIATE"
-
-    @event.listens_for(engine, "begin")
-    def _on_begin(conn: Connection) -> None:
-        conn.exec_driver_sql(begin)
-
-    Base.metadata.create_all(engine)
-    return engine
 
 
 def seeded_session_factory(engine: Engine) -> sessionmaker[Session]:

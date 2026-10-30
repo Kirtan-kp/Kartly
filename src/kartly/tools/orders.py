@@ -160,8 +160,9 @@ GET_ORDER = Tool(
     tier=RiskTier.READ_ONLY,
     description=(
         "Look up one of this customer's orders: status, items, amounts, placed and delivered "
-        "dates, and destination city. Use it for any question about what an order contains or "
-        "where it stands."
+        "dates, and destination city. Use it for what an order contains or what was paid. It "
+        "has NO carrier, estimated delivery date or delay information: for where a parcel is, "
+        "when it will arrive or why it is late, call get_tracking."
     ),
     args_model=OrderArgs,
     handler=get_order,
@@ -172,7 +173,8 @@ GET_TRACKING = Tool(
     tier=RiskTier.READ_ONLY,
     description=(
         "Get shipment tracking for one of this customer's orders: carrier, status, estimated "
-        "delivery date, whether it is delayed, and recent scan events."
+        "delivery date, whether it is delayed, and recent scan events. Use it for any question "
+        "about where an order is, when it will arrive, or why it is late."
     ),
     args_model=OrderArgs,
     handler=get_tracking,

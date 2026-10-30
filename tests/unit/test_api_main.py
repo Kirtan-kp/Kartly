@@ -27,6 +27,20 @@ def make_settings(**values: object) -> Settings:
     return Settings(_env_file=None, **values)  # type: ignore[call-arg,arg-type]
 
 
+@pytest.fixture(autouse=True)
+def _no_kartly_settings_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A developer's own KARTLY_DEFAULT_MODEL (set in .env or the shell) must not leak in."""
+    for name in (
+        "KARTLY_API_KEY",
+        "KARTLY_DEFAULT_MODEL",
+        "KARTLY_MAX_WORKERS",
+        "KARTLY_MAX_PENDING_RUNS",
+        "KARTLY_MODELS_CONFIG_PATH",
+        "KARTLY_DATABASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def wired(
     monkeypatch: pytest.MonkeyPatch, fake_server: FakeOpenAIServer, tmp_path: Path

@@ -19,6 +19,7 @@ from kartly.api import ApiState, BoundedExecutor, Busy, create_app
 from kartly.gateway import ToolGateway
 from kartly.llm import RateLimitError
 from kartly.orchestrator import TicketRunner
+from kartly.orchestrator.prompts import PROMPT_VERSION
 from kartly.store.models import AuditLog, Run, Ticket
 from tests.llm_support import ScriptedClient, make_response, tool_call
 from tests.support import FIXED_NOW, make_sqlite_engine, seeded_session_factory
@@ -185,7 +186,7 @@ def test_create_returns_202_and_the_ticket_can_be_read_back(
     ]
     [run] = ticket["runs"]
     assert run["status"] == "succeeded" and run["outcome"] == "drafted"
-    assert run["model_tier"] == "scripted" and run["prompt_version"] == "v0"
+    assert run["model_tier"] == "scripted" and run["prompt_version"] == PROMPT_VERSION
     assert isinstance(run["shadow_cost_usd"], str) and run["tokens_in"] == 200
 
 

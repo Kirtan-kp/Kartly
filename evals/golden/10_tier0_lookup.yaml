@@ -1,0 +1,175 @@
+# Tier 0 (read-only) cases: order status and tracking, from clean to messy.
+# Fixture orders: see README "Mock store and eval fixtures". The grading clock is fixed at
+# 2026-10-23 12:00 UTC, so "in transit" and "delayed" never drift.
+
+- id: tracking-in-transit
+  description: A plain question about an order that is on its way and on schedule.
+  tier: 0
+  intent: tracking
+  tags: [tier0, happy-path]
+  customer_id: C-0001
+  message: Hi, where is my order KRT-100002?
+  notes: >
+    get_tracking is the only tool that returns the estimated delivery date (25 Oct), so a
+    reply with the date proves the model asked for tracking and used the result.
+  expect:
+    outcome: drafted
+    calls:
+      - {any_of: [get_tracking], args: {order_id: KRT-100002}}
+    answer:
+      must_mention:
+        - [in transit, on its way, on the way, shipped]
+        - [25 oct, oct 25, october 25, "2026-10-25", 25th]
+      must_not_mention: [has been delivered, was delivered, out for delivery]
+
+- id: order-details-delivered
+  description: A delivered order, asking for the status and the total paid.
+  tier: 0
+  intent: order_status
+  tags: [tier0, happy-path]
+  customer_id: C-0001
+  message: Has order KRT-100001 been delivered? I also need to know the total I paid.
+  notes: The total (INR 2,898) is only in get_order, so the model has to call it.
+  expect:
+    outcome: drafted
+    calls:
+      - {any_of: [get_order], args: {order_id: KRT-100001}}
+    answer:
+      must_mention:
+        - [delivered]
+        - ["2,898", "2898"]
+      must_not_mention: [in transit, not been delivered, not delivered, "hasn't been delivered", yet to be delivered]
+
+- id: delayed-shipment
+  description: A late parcel with a carrier exception; the reply must admit the delay.
+  tier: 0
+  intent: tracking
+  tags: [tier0, delay]
+  customer_id: C-0003
+  message: |-
+    my package KRT-100006 was supposed to be here days ago. what is going on??
+  notes: >
+    The tool computes "delayed: true" so the model does not have to compare dates. The reply
+    must not invent a new delivery date or claim the parcel arrived.
+  expect:
+    outcome: drafted
+    calls:
+      - {any_of: [get_tracking], args: {order_id: KRT-100006}}
+    answer:
+      must_mention:
+        - [delayed, delay, late, behind schedule, exception]
+      must_not_mention:
+        - has been delivered
+        - was delivered
+        - will arrive today
+        - will arrive tomorrow
+        - will be delivered today
+        - will be delivered tomorrow
+
+- id: not-shipped-yet
+  description: An order that was only just placed; the reply must not claim it shipped.
+  tier: 0
+  intent: order_status
+  tags: [tier0]
+  customer_id: C-0002
+  message: Did my order KRT-100003 ship yet? Need to know before the weekend.
+  notes: Status is "placed" and there is no shipment, so there is no tracking to quote.
+  expect:
+    outcome: drafted
+    calls:
+      - {any_of: [get_order, get_tracking], args: {order_id: KRT-100003}}
+    answer:
+      must_mention:
+        - - not shipped
+          - not yet shipped
+          - hasn't shipped
+          - has not shipped
+          - hasn't been shipped
+          - has not been shipped
+          - yet to be shipped
+          - yet to ship
+          - not been dispatched
+          - not yet dispatched
+          - hasn't been dispatched
+          - being processed
+          - placed
+      must_not_mention:
+        - in transit
+        - out for delivery
+        - has been shipped
+        - has shipped
+        - was shipped
+
+- id: messy-lowercase-order-id
+  description: Slang, shouting and a lower-case order id in one message.
+  tier: 0
+  intent: tracking
+  tags: [tier0, messy]
+  customer_id: C-0001
+  message: heyy wheres my stuff?? order krt-100002 pls tell me asap!!!
+  notes: The tool normalises the id, so the call is accepted whichever case the model sends.
+  expect:
+    outcome: drafted
+    calls:
+      - {any_of: [get_tracking], args: {order_id: KRT-100002}}
+    answer:
+      must_mention:
+        - [in transit, on its way, on the way, shipped]
+        - [25 oct, oct 25, october 25, "2026-10-25", 25th]
+      must_not_mention: [has been delivered, was delivered, out for delivery]
+
+- id: missing-order-id
+  description: No order id anywhere. There is no "list my orders" tool, so the model must ask.
+  tier: 0
+  intent: order_status
+  tags: [tier0, edge]
+  customer_id: C-0001
+  message: Where is my order? It has been ages.
+  notes: >
+    Any tool call here would be a guess at an id, so none are allowed. The customer owns two
+    fixture orders; naming either without a lookup would be an invented claim.
+  expect:
+    outcome: drafted
+    max_tool_calls: 0
+    answer:
+      must_mention:
+        - [order number, order id, order no, "order #", order reference]
+      must_not_mention:
+        - KRT-100001
+        - KRT-100002
+        - in transit
+        - has been delivered
+        - has shipped
+        - has been shipped
+        - out for delivery
+
+- id: order-not-found
+  description: An order id that does not exist.
+  tier: 0
+  intent: order_status
+  tags: [tier0, edge]
+  customer_id: C-0001
+  message: Can you check KRT-999999 for me? I never got any update.
+  notes: >
+    No security event is expected: nothing here belongs to anyone else. The reply should say
+    it could not find the order and ask the customer to check the number.
+  expect:
+    outcome: drafted
+    calls:
+      - {any_of: [get_order, get_tracking], args: {order_id: KRT-999999}}
+    answer:
+      must_mention:
+        - - could not find
+          - couldn't find
+          - can't find
+          - cannot find
+          - unable to find
+          - unable to locate
+          - could not locate
+          - couldn't locate
+          - not found
+          - no order
+          - don't see
+          - do not see
+        - [check, double-check, verify, confirm, correct]
+      must_not_mention: [in transit, has shipped, has been shipped, has been delivered, out for delivery, will arrive]

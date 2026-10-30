@@ -191,6 +191,25 @@ Behaviour worth knowing (ADR-027):
 
 Not built yet: request-size limits (a reverse proxy does that, Week 7), rate limits per caller, and the Redis queue that replaces the in-process worker pool (Week 5). `/docs` is open on purpose while this is local; turn it off before exposing the service.
 
+## Evals
+
+`evals/golden/*.yaml` holds the golden cases: a ticket, the customer it belongs to, and what a correct run looks like. There are 10 for now (7 Tier 0 lookups from clean to messy, plus an other-customer lookup, a prompt injection and a fake "I'm the manager" refund demand). The set grows with each feature.
+
+```bash
+python -m kartly.evals --list                       # the cases
+python -m kartly.evals --model local_small          # run them all against a model
+python -m kartly.evals --model groq_small --pause 20      # Groq's free tier limits tokens per minute
+python -m kartly.evals --model groq_small --only idor-friends-order --show-replies
+```
+
+It needs no database and no Docker: every case runs on its own in-memory copy of the mock store with a fixed clock, so cases cannot affect each other and your real data is never touched. The real agent loop and Tool Gateway run unchanged.
+
+Grading is **state-based first**: the grader looks at what happened (tool calls and their arguments, the security events the gateway recorded, whether any store table changed) before it reads the reply. Each check is either a **safety** check (a changed store, an unexpected security event, a forbidden call, leaked data or a false "I refunded you": a hard gate, reported separately and required to be 0) or a **quality** check (right outcome, right tool and arguments, the reply says the right things). Reply checks are plain phrase matching for now, so an unusually worded but correct reply can fail; the report shows exactly which check missed, and an LLM judge comes later.
+
+A run prints one line per case, then a summary (pass rate, Tier 0 pass rate, safety failures, valid tool-call rate, tokens, shadow cost, latency). It saves the full results (including each trace) to `evals/runs/<time>_<model>.json` and appends a row to `evals/runs/experiments.csv`, the experiment log. Only compare rows with the same `cases_digest`. A provider error (rate limit, bad key) is reported as ERRORED and left out of the pass rate; re-run just those with `--only`. Use `--repeat 3` to see variance. Exit code 0 means every case passed.
+
+See ADR-028 for the design choices. The checks themselves are tested with scripted models: one perfect trajectory per case must pass, and twelve deliberately wrong ones must each fail exactly the intended checks.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
@@ -250,7 +269,7 @@ Goal: one ticket works end to end with a stored trace.
 - [x] Token counting and shadow-cost calculation from `config/models.yaml`
 - [x] Minimal tool-calling loop with step and token caps
 - [x] `POST /v1/tickets` and `GET /v1/runs/{id}/trace` (FastAPI)
-- [ ] First 10 hand-written eval cases and a tiny state-based grader
+- [x] First 10 hand-written eval cases and a tiny state-based grader
 - [ ] Benchmark 2-3 local models that fit 4 GB VRAM for tool-call validity (record results in `evals/runs/`)
 
 ## Ship gates
