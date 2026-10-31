@@ -39,10 +39,10 @@ def write(tmp_path: Path, cases: Any, name: str = "cases.yaml") -> Path:
 # ------------------------------------------------------------------------- the golden set
 
 
-def test_the_golden_set_has_ten_valid_cases_with_unique_ids() -> None:
+def test_the_golden_set_has_eleven_valid_cases_with_unique_ids() -> None:
     cases = load_cases(GOLDEN)
-    assert len(cases) == 10
-    assert len({c.id for c in cases}) == 10
+    assert len(cases) == 11
+    assert len({c.id for c in cases}) == 11
 
 
 def test_tier_zero_cases_come_first_and_every_case_is_documented() -> None:

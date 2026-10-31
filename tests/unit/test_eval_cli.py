@@ -52,7 +52,7 @@ def args(config: Path, tmp_path: Path, *more: str) -> list[str]:
 def test_list_shows_the_cases_without_needing_a_model(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--list"]) == 0
     out = capsys.readouterr().out
-    assert out.count("\n") == 10 and "idor-friends-order" in out and "tier 2" in out
+    assert out.count("\n") == 11 and "idor-friends-order" in out and "tier 2" in out
 
 
 def test_a_passing_run_prints_saves_and_exits_zero(
@@ -186,6 +186,10 @@ def test_options_reach_the_runner(
     main(args(config, tmp_path, *options))
     assert seen["cases"] == ["tracking-in-transit"]
     assert (seen["model_name"], seen["repeat"], seen["pause_s"]) == ("fake_small", 2, 9.5)
+    assert seen["screen"] is True
+
+    main(args(config, tmp_path, "--only", "tracking-in-transit", "--no-screen", "--no-save"))
+    assert seen["screen"] is False
 
 
 def test_the_model_client_is_closed_afterwards(

@@ -50,6 +50,7 @@ class StopReason(enum.StrEnum):
     TRUNCATED_REPLY = "truncated_reply"  # the reply was cut off by the output cap
     LLM_ERROR = "llm_error"
     GATEWAY_ERROR = "gateway_error"  # the gateway failed closed (for example, audit write failed)
+    SCREENED = "screened"  # the injection screen sent the ticket to a human; no model call was made
 
 
 @dataclass(frozen=True)

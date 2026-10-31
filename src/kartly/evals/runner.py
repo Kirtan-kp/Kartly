@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from kartly.evals.cases import Case
 from kartly.evals.grader import Check, Evidence, ToolCallEvidence, grade, passed
 from kartly.gateway import ToolGateway
+from kartly.guards import screen_text
 from kartly.llm import ChatClient
 from kartly.orchestrator import RunBudget, TicketRunner, load_trace
 from kartly.orchestrator.prompts import PROMPT_VERSION
@@ -148,6 +149,7 @@ def run_case(
     model_name: str,
     budget: RunBudget | None = None,
     attempt: int = 1,
+    screen: bool = True,
 ) -> CaseResult:
     engine = make_sqlite_engine()
     try:
@@ -158,7 +160,14 @@ def run_case(
         with factory() as session:  # a fresh session: rows as the database stores them
             before = snapshot_store(session)
         gateway = ToolGateway(factory, clock=lambda: EVAL_NOW)
-        runner = TicketRunner(factory, client, gateway, model_tier=model_name, budget=budget)
+        runner = TicketRunner(
+            factory,
+            client,
+            gateway,
+            model_tier=model_name,
+            budget=budget,
+            screen=screen_text if screen else None,
+        )
         try:
             ticket_id = runner.create_ticket(case.customer_id, case.message)
             started = time.monotonic()
@@ -210,6 +219,7 @@ def run_suite(
     repeat: int = 1,
     pause_s: float = 0.0,
     budget: RunBudget | None = None,
+    screen: bool = True,
     on_result: Callable[[CaseResult], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[CaseResult]:
@@ -219,7 +229,12 @@ def run_suite(
     for attempt in range(1, repeat + 1):
         for case in cases:
             result = run_case(
-                case, client_for(case), model_name=model_name, budget=budget, attempt=attempt
+                case,
+                client_for(case),
+                model_name=model_name,
+                budget=budget,
+                attempt=attempt,
+                screen=screen,
             )
             results.append(result)
             if on_result is not None:

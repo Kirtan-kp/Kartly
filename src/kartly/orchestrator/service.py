@@ -24,12 +24,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from kartly.gateway import ToolGateway
+from kartly.guards import ScreenResult, screen_text
 from kartly.llm import ChatClient
 from kartly.orchestrator.budget import RunBudget
 from kartly.orchestrator.loop import AgentLoop, LoopResult, StepRecord, StopReason
 from kartly.orchestrator.prompts import PROMPT_VERSION, build_messages
 from kartly.sanitize import clean_str
 from kartly.store.models import (
+    ActorType,
+    AuditLog,
     Customer,
     Message,
     MessageRole,
@@ -37,6 +40,7 @@ from kartly.store.models import (
     RunMode,
     RunStatus,
     RunStep,
+    StepKind,
     Ticket,
     TicketStatus,
 )
@@ -76,8 +80,12 @@ class TicketRunner:
         budget: RunBudget | None = None,
         model_tier: str | None = None,
         allowed_tools: Collection[str] | None = None,
+        screen: Callable[[str], ScreenResult] | None = screen_text,
     ) -> None:
+        """``screen`` checks customer text for prompt injection before any model call (default
+        on); a suspicious ticket goes straight to a human. ``None`` turns it off."""
         self._sessions = session_factory
+        self._screen = screen
         self._model_tier = model_tier
         self._loop = AgentLoop(client, gateway, budget=budget, allowed_tools=allowed_tools)
 
@@ -119,6 +127,9 @@ class TicketRunner:
 
     def run(self, ticket_id: uuid.UUID) -> RunSummary:
         run_id, customer_id, thread = self._open_run(ticket_id)
+        verdict = self._screen_thread(thread)
+        if verdict.suspicious:
+            return self._close_screened(run_id, ticket_id, verdict)
         ctx = CallContext(ticket_id=ticket_id, run_id=run_id, customer_id=customer_id)
         try:
             result = self._loop.run(
@@ -132,6 +143,67 @@ class TicketRunner:
         return self._close_run(run_id, ticket_id, result)
 
     # -------------------------------------------------------------------- internals
+
+    def _screen_thread(self, thread: list[tuple[MessageRole, str]]) -> ScreenResult:
+        if self._screen is None:
+            return ScreenResult(False)
+        rules: list[str] = []
+        for role, text in thread:
+            if role is MessageRole.CUSTOMER:
+                rules.extend(r for r in self._screen(text).rules if r not in rules)
+        return ScreenResult(bool(rules), tuple(rules))
+
+    def _close_screened(
+        self, run_id: uuid.UUID, ticket_id: uuid.UUID, verdict: ScreenResult
+    ) -> RunSummary:
+        """Hand a suspicious ticket to a human. The run succeeded at its job: it did not fail."""
+        detail = f"suspected prompt injection ({', '.join(verdict.rules)})"
+        with self._sessions() as session:
+            run = session.get(Run, run_id)
+            ticket = session.get(Ticket, ticket_id)
+            assert run is not None and ticket is not None
+            session.add(
+                RunStep(
+                    run_id=run_id,
+                    idx=0,
+                    kind=StepKind.STAGE,
+                    name="screen",
+                    input={"rules": list(verdict.rules)},
+                    output={"suspicious": True},
+                )
+            )
+            session.add(
+                AuditLog(
+                    actor_type=ActorType.SYSTEM,
+                    actor_id="screen",
+                    action="screen.blocked",
+                    ticket_id=ticket_id,
+                    run_id=run_id,
+                    details={
+                        "security_event": "prompt_injection_suspected",
+                        "rules": list(verdict.rules),
+                    },
+                )
+            )
+            run.status = RunStatus.SUCCEEDED
+            run.outcome = "escalated"
+            run.error = clean_str(f"{StopReason.SCREENED}: {detail}", MAX_ERROR_CHARS)
+            run.finished_at = datetime.now(UTC)
+            ticket.status = TicketStatus.ESCALATED
+            session.commit()
+        return RunSummary(
+            run_id=run_id,
+            ticket_id=ticket_id,
+            outcome="escalated",
+            stop_reason=StopReason.SCREENED,
+            detail=detail,
+            answer=None,
+            llm_calls=0,
+            tool_calls=0,
+            tokens_in=0,
+            tokens_out=0,
+            cost_usd=Decimal(0),
+        )
 
     def _open_run(
         self, ticket_id: uuid.UUID

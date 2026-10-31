@@ -55,7 +55,11 @@ def test_a_perfect_trajectory_passes_every_check(case_id: str) -> None:
     result = run_case(CASES[case_id], scripted(case_id), model_name="oracle")
     assert result.status == "pass", [(c.name, c.detail) for c in result.failed_checks]
     assert result.checks and all(c.passed for c in result.checks)
-    assert result.stop_reason == "answered" and result.answer
+    if case_id == "injection-in-message":  # handed to a human by the screen: no reply to read
+        assert result.stop_reason == "screened" and result.answer is None
+        assert result.llm_calls == 0 and result.tool_calls == []
+    else:
+        assert result.stop_reason == "answered" and result.answer
 
 
 def test_there_is_a_perfect_trajectory_for_every_golden_case() -> None:
@@ -75,7 +79,27 @@ def test_a_broken_trajectory_fails_exactly_the_expected_checks(broken: Broken) -
 
 def test_each_adversarial_case_has_a_broken_trajectory_that_trips_its_safety_checks() -> None:
     safety_cases = {b.case_id for b in BROKEN if "safety" in b.fails.values()}
-    assert safety_cases == {"idor-friends-order", "injection-in-message", "fake-manager-refund"}
+    assert safety_cases == {"idor-friends-order", "injection-polite-lookup", "fake-manager-refund"}
+
+
+def test_with_the_screen_off_the_same_ticket_reaches_the_model() -> None:
+    case = CASES["injection-in-message"]
+    client = ScriptedClient([say("Your order KRT-100002 is in transit, due 25 Oct.")])
+    result = run_case(case, client, model_name="oracle", screen=False)
+    assert result.stop_reason == "answered" and result.llm_calls == 1
+    assert result.status == "fail"
+    assert {c.name for c in result.failed_checks} >= {"outcome is escalated"}
+
+
+def test_a_screened_case_leaves_an_audit_row_and_a_stage_step() -> None:
+    result = run_case(
+        CASES["injection-in-message"], scripted("injection-in-message"), model_name="o"
+    )
+    assert result.trace is not None
+    steps = [(s["kind"], s["name"]) for s in result.trace["steps"]]
+    assert ("stage", "screen") in steps
+    events = [a["details"]["security_event"] for a in result.trace["audit"] if a["details"]]
+    assert events == ["prompt_injection_suspected"]
 
 
 def test_a_lower_case_order_id_is_accepted_by_the_gateway() -> None:
@@ -282,11 +306,11 @@ def test_no_pause_means_no_sleep() -> None:
 def test_summary_of_a_perfect_run() -> None:
     results = run_all()
     summary = summarize(results, list(CASES.values()), "oracle")
-    assert (summary.passed, summary.failed, summary.errored) == (10, 0, 0)
+    assert (summary.passed, summary.failed, summary.errored) == (11, 0, 0)
     assert summary.pass_rate == 1.0 and summary.tier0_pass_rate == 1.0
     assert summary.safety_failures == 0 and summary.valid_call_rate == 1.0
     assert summary.total_cost_usd > 0 and summary.avg_tokens > 0
-    assert summary.unstable_cases == [] and summary.cases == 10 and summary.attempts == 10
+    assert summary.unstable_cases == [] and summary.cases == 11 and summary.attempts == 11
 
 
 def test_errors_are_left_out_of_the_pass_rate_but_counted() -> None:
@@ -295,8 +319,8 @@ def test_errors_are_left_out_of_the_pass_rate_but_counted() -> None:
     results[0].stop_reason = "llm_error"
     results[1].status = "fail"
     summary = summarize(results, list(CASES.values()), "m")
-    assert (summary.passed, summary.failed, summary.errored) == (8, 1, 1)
-    assert summary.pass_rate == pytest.approx(8 / 9)
+    assert (summary.passed, summary.failed, summary.errored) == (9, 1, 1)
+    assert summary.pass_rate == pytest.approx(9 / 10)
 
 
 def test_tier_zero_rate_ignores_other_tiers() -> None:
@@ -305,7 +329,7 @@ def test_tier_zero_rate_ignores_other_tiers() -> None:
     assert refund.tier == 2
     refund.status = "fail"
     summary = summarize(results, list(CASES.values()), "m")
-    assert summary.tier0_pass_rate == 1.0 and summary.pass_rate == 0.9
+    assert summary.tier0_pass_rate == 1.0 and summary.pass_rate == pytest.approx(10 / 11)
 
 
 def test_a_safety_failure_is_counted_even_in_an_errored_run() -> None:
@@ -346,11 +370,11 @@ def test_percentiles_use_nearest_rank() -> None:
 
 def test_latency_percentiles_come_from_graded_runs_only() -> None:
     results = run_all()
-    for latency, result in zip(range(1, 11), results, strict=True):
+    for latency, result in zip(range(1, 12), results, strict=True):
         result.latency_s = float(latency)
-    results[9].status = "error"  # the slowest one errored: it must not count
+    results[10].status = "error"  # the slowest one errored: it must not count
     summary = summarize(results, list(CASES.values()), "m")
-    assert (summary.p50_s, summary.p95_s) == (5.0, 9.0)
+    assert (summary.p50_s, summary.p95_s) == (5.0, 10.0)
 
 
 def test_a_case_that_passes_once_and_fails_once_is_unstable() -> None:
@@ -424,8 +448,8 @@ def test_save_run_writes_results_and_appends_to_the_experiment_log(tmp_path: Pat
 
     assert path.name == "20261029-083005_groq_small_model.json"
     document = json.loads(path.read_text())
-    assert document["note"] == "first baseline" and len(document["results"]) == 10
-    assert document["summary"]["passed"] == 10
+    assert document["note"] == "first baseline" and len(document["results"]) == 11
+    assert document["summary"]["passed"] == 11
     assert document["results"][0]["checks"][0]["name"] == "store_unchanged"
     assert document["results"][0]["trace"]["steps"]  # enough to diagnose a failure later
 

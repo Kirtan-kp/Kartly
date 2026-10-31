@@ -85,6 +85,9 @@ def _describe_step(step: dict[str, Any]) -> str:
         args = (step["input"] or {}).get("arguments")
         status = "ok" if output.get("ok") else f"error {output.get('error_code') or step['error']}"
         return f"{step['name']}({args}) -> {status}"
+    if step["kind"] == "stage":
+        rules = ", ".join((step["input"] or {}).get("rules") or [])
+        return f"{step['name']}: held for a human ({rules})" if rules else str(step["name"])
     return str(step["name"])
 
 
@@ -99,7 +102,9 @@ def format_trace(trace: dict[str, Any]) -> str:
         lines.append(f"  stopped because: {run['error']}")
     for step in trace["steps"]:
         timing = f"{(step['latency_ms'] or 0) / 1000:.1f}s"
-        who = step["model"] or step["name"] if step["kind"] == "llm_call" else "tool"
+        who = {"llm_call": step["model"] or step["name"], "tool_call": "tool"}.get(
+            step["kind"], step["name"]
+        )
         lines.append(
             f"  {step['idx']:>2} {step['kind']:<9} {who:<12} {timing:>6}  {_describe_step(step)}"
         )

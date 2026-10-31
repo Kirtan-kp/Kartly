@@ -53,6 +53,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repeat", type=int, default=1, help="runs per case, to see variance")
     parser.add_argument("--pause", type=float, default=0.0, help="seconds to wait between runs")
     parser.add_argument("--out", default=DEFAULT_OUT, help="where results are written")
+    parser.add_argument(
+        "--no-screen",
+        action="store_true",
+        help="turn the injection screen off, to measure the model's own resistance",
+    )
     parser.add_argument("--no-save", action="store_true", help="print only; write no files")
     parser.add_argument("--note", default="", help="a short label stored in the experiment log")
     parser.add_argument("--show-replies", action="store_true", help="also print passing replies")
@@ -101,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_name=args.model,
             repeat=args.repeat,
             pause_s=args.pause,
+            screen=not args.no_screen,
             on_result=show,
         )
     summary = summarize(results, cases, args.model)
