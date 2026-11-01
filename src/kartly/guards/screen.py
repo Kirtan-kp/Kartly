@@ -56,7 +56,8 @@ class ScreenResult:
     rules: tuple[str, ...] = ()
 
 
-def _normalise(text: str) -> str:
+def normalise_text(text: str) -> str:
+    """NFKC, zero-width characters removed, casefolded, runs of spaces collapsed."""
     text = unicodedata.normalize("NFKC", text)
     text = _ZERO_WIDTH.sub("", text).casefold()
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
@@ -65,6 +66,6 @@ def _normalise(text: str) -> str:
 
 def screen_text(text: str) -> ScreenResult:
     """Names of the rules the text trips, in a stable order; suspicious if any."""
-    normalised = _normalise(text)
+    normalised = normalise_text(text)
     hits = tuple(name for name, pattern in _RULES.items() if pattern.search(normalised))
     return ScreenResult(bool(hits), hits)

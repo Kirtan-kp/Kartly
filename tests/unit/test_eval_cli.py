@@ -52,7 +52,7 @@ def args(config: Path, tmp_path: Path, *more: str) -> list[str]:
 def test_list_shows_the_cases_without_needing_a_model(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--list"]) == 0
     out = capsys.readouterr().out
-    assert out.count("\n") == 11 and "idor-friends-order" in out and "tier 2" in out
+    assert out.count("\n") == 14 and "idor-friends-order" in out and "tier 2" in out
 
 
 def test_a_passing_run_prints_saves_and_exits_zero(

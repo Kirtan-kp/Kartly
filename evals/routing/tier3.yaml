@@ -1,0 +1,300 @@
+# Routing eval: messages labelled with the Tier 3 category a human must handle (null = ordinary).
+# Messages are invented. `known:` marks a phrasing the rules are known to get wrong; those are
+# reported separately and do not count against the gate. Do not tune rules to the messages here
+# without adding new ones: this file is how the rules are measured.
+- id: legal-01
+  category: legal
+  message: If my refund is not processed this week I will talk to my lawyer.
+- id: legal-02
+  category: legal
+  message: I am filing a case against Kartly in consumer court.
+- id: legal-03
+  category: legal
+  message: 'This is a legal notice: return my money within 7 days.'
+- id: legal-04
+  category: legal
+  message: I'll sue you for selling me a fake product
+- id: legal-05
+  category: legal
+  message: My advocate will be contacting you regarding order KRT-100001.
+- id: legal-06
+  category: legal
+  message: We will approach the consumer forum if this is not fixed
+- id: legal-07
+  category: legal
+  message: Going to the NCDRC about this, you have been warned.
+- id: legal-08
+  category: legal
+  message: I have already informed the police about the missing parcel.
+- id: legal-09
+  category: legal
+  message: Your delay is a breach of contract and I will take legal action.
+- id: legal-10
+  category: legal
+  message: LAWYER. COURT. Last warning.
+- id: legal-11
+  category: legal
+  message: I will file a complaint against your company with the cyber crime cell
+- id: fraud-12
+  category: fraud
+  message: I did not place this order. It is fraud.
+- id: fraud-13
+  category: fraud
+  message: I am going to do a chargeback with my bank.
+- id: fraud-14
+  category: fraud
+  message: There is an unauthorized transaction of INR 4,999 on my card from your site
+- id: fraud-15
+  category: fraud
+  message: Looks like a scam, I paid and nothing came.
+- id: fraud-16
+  category: fraud
+  message: I never authorized this payment, please reverse it
+- id: fraud-17
+  category: fraud
+  message: my bank is disputing the charge for order KRT-100002
+- id: fraud-18
+  category: fraud
+  message: Someone used my stolen card on your store.
+- id: fraud-19
+  category: fraud
+  message: this is fraudulent, you charged me for items I never ordered
+- id: fraud-20
+  category: fraud
+  message: Chargeback initiated.
+- id: account_security-21
+  category: account_security
+  message: My account has been hacked and orders were placed in my name.
+- id: account_security-22
+  category: account_security
+  message: I think someone logged into my account and changed the address
+- id: account_security-23
+  category: account_security
+  message: Please delete my account and all my personal data.
+- id: account_security-24
+  category: account_security
+  message: I want my data erased under GDPR
+- id: account_security-25
+  category: account_security
+  message: I got a phishing mail pretending to be from Kartly, did you have a data breach?
+- id: account_security-26
+  category: account_security
+  message: Somebody else accessed my account yesterday night.
+- id: account_security-27
+  category: account_security
+  message: my login is compromised, please lock it
+- id: account_security-28
+  category: account_security
+  message: Remove my personal information from your systems
+- id: safety-29
+  category: safety
+  message: The heater caught fire while my kid was in the room.
+- id: safety-30
+  category: safety
+  message: The water bottle cap exploded and cut my hand, I was injured
+- id: safety-31
+  category: safety
+  message: I got an electric shock from the charger you sold me.
+- id: safety-32
+  category: safety
+  message: My daughter had an allergic reaction after using the cream, we went to the hospital.
+- id: safety-33
+  category: safety
+  message: The kettle is dangerous, the base melted
+- id: safety-34
+  category: safety
+  message: Blender burnt my hand badly
+- id: safety-35
+  category: safety
+  message: My son swallowed a small part of the toy.
+- id: safety-36
+  category: safety
+  message: this product is unsafe, the cable sparks
+- id: safety-37
+  category: safety
+  message: Baby started choking on the bottle nipple
+- id: distress-38
+  category: distress
+  message: Honestly I don't want to live anymore, this order was the last straw.
+- id: distress-39
+  category: distress
+  message: I feel like I want to die
+- id: distress-40
+  category: distress
+  message: I am thinking of suicide
+- id: distress-41
+  category: distress
+  message: I will kill myself if this is not resolved
+- id: threat-42
+  category: threat
+  message: I will kill you if my money is not returned.
+- id: threat-43
+  category: threat
+  message: I'll blow up your warehouse.
+- id: threat-44
+  category: threat
+  message: I swear I will stab your delivery guy
+- id: ok-01
+  category: null
+  message: Where is my order KRT-100002?
+- id: ok-02
+  category: null
+  message: Can you tell me the delivery date for KRT-100006?
+- id: ok-03
+  category: null
+  message: My package is late and I am quite annoyed. Please look into it.
+- id: ok-04
+  category: null
+  message: I need to change the delivery address for KRT-100003.
+- id: ok-05
+  category: null
+  message: Can I cancel my order? I placed it this morning.
+- id: ok-06
+  category: null
+  message: I would like a refund for the earbuds, they stopped working after two days.
+- id: ok-07
+  category: null
+  message: Do you sell a fire retardant spray? I need one for the kitchen.
+- id: ok-08
+  category: null
+  message: I love the new Fire stick bundle, when is it back in stock?
+- id: ok-09
+  category: null
+  message: Is the water bottle safe for hot drinks?
+- id: ok-10
+  category: null
+  message: The legal size notebook I ordered has no ruled lines, can I exchange it?
+- id: ok-11
+  category: null
+  message: The delivery guy was very polite, thanks!
+- id: ok-12
+  category: null
+  message: How do I update my email address?
+- id: ok-13
+  category: null
+  message: What is your return policy for shoes?
+- id: ok-14
+  category: null
+  message: The phone case looks a bit different from the photo, can I return it?
+- id: ok-15
+  category: null
+  message: My order says delivered but I haven't received it yet.
+- id: ok-16
+  category: null
+  message: Can you recommend a bed sheet that is not too hot in summer?
+- id: ok-17
+  category: null
+  message: I want to know if the charger is compatible with my laptop.
+- id: ok-18
+  category: null
+  message: Please resend the invoice for KRT-100001, my accountant needs it.
+- id: ok-19
+  category: null
+  message: The courier left the box in the rain, the packaging is wet.
+- id: ok-20
+  category: null
+  message: I was charged once but the app shows two entries, can you check?
+- id: ok-21
+  category: null
+  message: Do you deliver to Indore on Sundays?
+- id: ok-22
+  category: null
+  message: The tape on the parcel was torn and one item is scratched.
+- id: ok-23
+  category: null
+  message: I received the wrong colour, I ordered blue.
+- id: ok-24
+  category: null
+  message: Thanks for the quick replies!
+- id: ok-25
+  category: null
+  message: Is cash on delivery available for orders above 5000?
+- id: ok-26
+  category: null
+  message: my order is stuck in transit for 3 days
+- id: ok-27
+  category: null
+  message: How long does a refund take to show up in my account?
+- id: ok-28
+  category: null
+  message: I have a rash of orders arriving late this month, can you check KRT-100004?
+- id: ok-29
+  category: null
+  message: Where can I find the warranty card?
+- id: ok-30
+  category: null
+  message: Please close this ticket, the order arrived.
+- id: ok-31
+  category: null
+  message: The kettle works fine but the lid is loose.
+- id: ok-32
+  category: null
+  message: Do you have a size chart for the kurta?
+- id: ok-33
+  category: null
+  message: I need a GST invoice for the water bottle.
+- id: ok-34
+  category: null
+  message: Can I add one more item to my order before it ships?
+- id: fraud-extra-1
+  category: fraud
+  message: I never authorised that payment, it is not mine.
+- id: fraud-extra-2
+  category: fraud
+  message: I did not make this purchase, who placed it?
+- id: account_security-extra-1
+  category: account_security
+  message: Somebody got into my account and ordered a phone.
+- id: account_security-extra-2
+  category: account_security
+  message: Anyone else logged into my account? I see strange orders.
+- id: threat-extra-1
+  category: threat
+  message: I will kill your delivery boy if he comes again.
+- id: threat-extra-2
+  category: threat
+  message: I'm going to blow up your office
+- id: safety-extra-1
+  category: safety
+  message: I developed a rash on my skin after using the soap.
+- id: ok-extra-1
+  category: null
+  message: There has been a rash of late deliveries in my area.
+- id: ok-extra-2
+  category: null
+  message: I never received the invoice for my last order.
+- id: ok-extra-3
+  category: null
+  message: I did not get a confirmation email for my order.
+- id: gap-judge
+  category: legal
+  known: miss
+  message: I will see you in front of a judge.
+- id: gap-paraphrase-fraud
+  category: fraud
+  known: miss
+  message: Money left my account for something I never bought from you.
+- id: gap-hinglish-legal
+  category: legal
+  known: miss
+  message: Main aapke khilaf kanooni karyavahi karunga.
+- id: gap-obfuscated
+  category: legal
+  known: miss
+  message: I'll call my l a w y e r.
+- id: gap-distress-soft
+  category: distress
+  known: miss
+  message: I just can't go on like this anymore.
+- id: fp-tennis-court
+  category: null
+  known: false_alarm
+  message: Do these shoes work on a badminton court?
+- id: fp-police-shirt
+  category: null
+  known: false_alarm
+  message: Is the police blue shirt available in size L?
+- id: fp-dont-sue
+  category: null
+  known: false_alarm
+  message: No need to sue anyone, I just want to know where my parcel is.

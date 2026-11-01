@@ -55,8 +55,14 @@ def test_a_perfect_trajectory_passes_every_check(case_id: str) -> None:
     result = run_case(CASES[case_id], scripted(case_id), model_name="oracle")
     assert result.status == "pass", [(c.name, c.detail) for c in result.failed_checks]
     assert result.checks and all(c.passed for c in result.checks)
-    if case_id == "injection-in-message":  # handed to a human by the screen: no reply to read
-        assert result.stop_reason == "screened" and result.answer is None
+    held = {
+        "injection-in-message": "screened",  # handed to a human before any model call
+        "tier3-legal-threat": "routed_tier3",
+        "tier3-safety-injury": "routed_tier3",
+        "tier3-distress": "routed_tier3",
+    }
+    if case_id in held:
+        assert result.stop_reason == held[case_id] and result.answer is None
         assert result.llm_calls == 0 and result.tool_calls == []
     else:
         assert result.stop_reason == "answered" and result.answer
@@ -306,11 +312,11 @@ def test_no_pause_means_no_sleep() -> None:
 def test_summary_of_a_perfect_run() -> None:
     results = run_all()
     summary = summarize(results, list(CASES.values()), "oracle")
-    assert (summary.passed, summary.failed, summary.errored) == (11, 0, 0)
+    assert (summary.passed, summary.failed, summary.errored) == (14, 0, 0)
     assert summary.pass_rate == 1.0 and summary.tier0_pass_rate == 1.0
     assert summary.safety_failures == 0 and summary.valid_call_rate == 1.0
     assert summary.total_cost_usd > 0 and summary.avg_tokens > 0
-    assert summary.unstable_cases == [] and summary.cases == 11 and summary.attempts == 11
+    assert summary.unstable_cases == [] and summary.cases == 14 and summary.attempts == 14
 
 
 def test_errors_are_left_out_of_the_pass_rate_but_counted() -> None:
@@ -319,8 +325,8 @@ def test_errors_are_left_out_of_the_pass_rate_but_counted() -> None:
     results[0].stop_reason = "llm_error"
     results[1].status = "fail"
     summary = summarize(results, list(CASES.values()), "m")
-    assert (summary.passed, summary.failed, summary.errored) == (9, 1, 1)
-    assert summary.pass_rate == pytest.approx(9 / 10)
+    assert (summary.passed, summary.failed, summary.errored) == (12, 1, 1)
+    assert summary.pass_rate == pytest.approx(12 / 13)
 
 
 def test_tier_zero_rate_ignores_other_tiers() -> None:
@@ -329,7 +335,7 @@ def test_tier_zero_rate_ignores_other_tiers() -> None:
     assert refund.tier == 2
     refund.status = "fail"
     summary = summarize(results, list(CASES.values()), "m")
-    assert summary.tier0_pass_rate == 1.0 and summary.pass_rate == pytest.approx(10 / 11)
+    assert summary.tier0_pass_rate == 1.0 and summary.pass_rate == pytest.approx(13 / 14)
 
 
 def test_a_safety_failure_is_counted_even_in_an_errored_run() -> None:
@@ -370,11 +376,11 @@ def test_percentiles_use_nearest_rank() -> None:
 
 def test_latency_percentiles_come_from_graded_runs_only() -> None:
     results = run_all()
-    for latency, result in zip(range(1, 12), results, strict=True):
+    for latency, result in zip(range(1, 15), results, strict=True):
         result.latency_s = float(latency)
-    results[10].status = "error"  # the slowest one errored: it must not count
+    results[13].status = "error"  # the slowest one errored: it must not count
     summary = summarize(results, list(CASES.values()), "m")
-    assert (summary.p50_s, summary.p95_s) == (5.0, 10.0)
+    assert (summary.p50_s, summary.p95_s) == (7.0, 13.0)
 
 
 def test_a_case_that_passes_once_and_fails_once_is_unstable() -> None:
@@ -448,8 +454,8 @@ def test_save_run_writes_results_and_appends_to_the_experiment_log(tmp_path: Pat
 
     assert path.name == "20261029-083005_groq_small_model.json"
     document = json.loads(path.read_text())
-    assert document["note"] == "first baseline" and len(document["results"]) == 11
-    assert document["summary"]["passed"] == 11
+    assert document["note"] == "first baseline" and len(document["results"]) == 14
+    assert document["summary"]["passed"] == 14
     assert document["results"][0]["checks"][0]["name"] == "store_unchanged"
     assert document["results"][0]["trace"]["steps"]  # enough to diagnose a failure later
 

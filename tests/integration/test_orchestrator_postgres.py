@@ -150,3 +150,19 @@ def test_a_screened_ticket_is_closed_and_audited_on_postgres(
     assert [s["kind"] for s in trace["steps"]] == ["stage"]
     [audit] = trace["audit"]
     assert audit["details"]["security_event"] == "prompt_injection_suspected"
+
+
+def test_a_tier_3_ticket_is_closed_and_audited_on_postgres(
+    pg_factory: sessionmaker[Session], pg_gateway: ToolGateway
+) -> None:
+    client = ScriptedClient([])
+    runner = TicketRunner(pg_factory, client, pg_gateway)
+    summary = runner.run(runner.create_ticket("C-0001", "My lawyer will call you about the fraud"))
+    assert summary.stop_reason is StopReason.ROUTED_TIER3 and client.calls == []
+    with pg_factory() as session:
+        trace = load_trace(session, summary.run_id)
+    assert trace is not None and trace["ticket"]["status"] == "escalated"
+    [step] = trace["steps"]
+    assert step["name"] == "route" and step["input"]["categories"] == ["legal", "fraud"]
+    [audit] = trace["audit"]
+    assert audit["action"] == "route.escalated"

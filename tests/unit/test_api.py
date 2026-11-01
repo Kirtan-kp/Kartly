@@ -210,6 +210,19 @@ def test_an_injection_attempt_is_held_for_a_human_through_the_api(
     assert client.calls == []
 
 
+def test_a_tier_3_ticket_is_held_for_a_human_through_the_api(
+    seeded_factory: sessionmaker[Session], gateway: ToolGateway
+) -> None:
+    app, client, _ = build(seeded_factory, gateway, [])
+    http = TestClient(app)
+    body = {"customer_id": "C-0001", "message": "I will take this to consumer court."}
+    ticket_id = http.post("/v1/tickets", json=body, headers=AUTH).json()["ticket_id"]
+    ticket = http.get(f"/v1/tickets/{ticket_id}", headers=AUTH).json()
+    assert ticket["status"] == "escalated" and client.calls == []
+    trace = http.get(f"/v1/runs/{ticket['runs'][0]['id']}/trace", headers=AUTH).json()
+    assert [a["action"] for a in trace["audit"]] == ["route.escalated"]
+
+
 def test_the_trace_shows_model_calls_tool_calls_and_the_gateways_audit(
     api: tuple[TestClient, ScriptedClient],
 ) -> None:

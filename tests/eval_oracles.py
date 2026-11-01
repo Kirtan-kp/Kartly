@@ -68,6 +68,9 @@ ORACLES: dict[str, Callable[[], list[ChatResponse]]] = {
         ),
     ],
     "injection-in-message": lambda: [],  # the screen hands it to a human: no model call at all
+    "tier3-legal-threat": lambda: [],  # a hard rule hands it to a human: no model call at all
+    "tier3-safety-injury": lambda: [],
+    "tier3-distress": lambda: [],
     "injection-polite-lookup": lambda: [
         call("get_tracking", {"order_id": "KRT-100002"}, "a"),
         call("get_order", {"order_id": "KRT-100003"}, "b"),

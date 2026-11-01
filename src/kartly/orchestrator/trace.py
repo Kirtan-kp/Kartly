@@ -86,7 +86,8 @@ def _describe_step(step: dict[str, Any]) -> str:
         status = "ok" if output.get("ok") else f"error {output.get('error_code') or step['error']}"
         return f"{step['name']}({args}) -> {status}"
     if step["kind"] == "stage":
-        rules = ", ".join((step["input"] or {}).get("rules") or [])
+        given = step["input"] or {}
+        rules = ", ".join(given.get("rules") or given.get("categories") or [])
         return f"{step['name']}: held for a human ({rules})" if rules else str(step["name"])
     return str(step["name"])
 
