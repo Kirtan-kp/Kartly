@@ -226,6 +226,17 @@ python -m kartly.evals.routing --show    # every message with the rules' verdict
 
 Both numbers are gates (exit code 1 on a miss or a false alarm). The labelled messages are invented, so 100% there is a floor, not a production recall; phrasings the rules are known to miss (paraphrase, Hinglish, spaced-out letters) are listed separately and are what the classifier layer is for. See ADR-031.
 
+## Routing classifier
+
+A small model labels each ticket with one JSON object (intent, tier, complexity, sentiment, confidence). Code keeps it safe: every intent has a minimum tier (a refund is at least Tier 2), the final tier is the higher of the rule tier and the classifier tier, and unusable output or a failed call falls back to the rules and asks for clarification instead of lowering anything. It is measured, not yet wired into the ticket flow:
+
+```bash
+python -m kartly.evals.classify --model local_small
+python -m kartly.evals.classify --model groq_small --pause 5 --classifier-version c1   # compare prompts
+```
+
+It reports intent and tier accuracy, Tier 3 recall for the whole router (and for the rules and the classifier alone), tickets routed too low or too high, unusable outputs, the confusion list, tokens, cost and latency, and appends a row to `evals/runs/routing_experiments.csv`. Prompt versions (`c1`, `c2`) stay selectable so you can compare them on the same cases digest. See ADR-032 and ADR-033.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
