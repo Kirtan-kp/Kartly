@@ -1,0 +1,284 @@
+# Retrieval eval: questions labelled with the knowledge-base chunks that answer them.
+# Invented questions, labelled by the author of the knowledge base. `relevant: []` marks a question
+# the knowledge base cannot answer (used to pick a no-answer threshold later, not scored as a hit).
+# Tags: plain (shares words with the answer), paraphrase, messy, multi (needs several chunks).
+- id: q01
+  query: What is your return policy for shoes?
+  relevant:
+  - returns#return-window
+  tags:
+  - plain
+- id: q02
+  query: How many days do I have to return a product?
+  relevant:
+  - returns#return-window
+  tags:
+  - plain
+- id: q03
+  query: How long does a refund take after a return?
+  relevant:
+  - refunds#refund-timeline
+  tags:
+  - plain
+- id: q04
+  query: Do refunds go back to the original payment method?
+  relevant:
+  - refunds#where-the-money-goes
+  tags:
+  - plain
+- id: q05
+  query: Can I return an item that was on sale?
+  relevant:
+  - returns#items-bought-on-sale
+  - returns#items-that-cannot-be-returned
+  tags:
+  - plain
+- id: q06
+  query: Do you deliver to Indore on Sundays?
+  relevant:
+  - shipping#delivery-days
+  tags:
+  - plain
+- id: q07
+  query: Is cash on delivery available for orders above 5000?
+  relevant:
+  - payments#cash-on-delivery-limit
+  tags:
+  - plain
+- id: q08
+  query: What are your delivery charges?
+  relevant:
+  - shipping#delivery-charges
+  tags:
+  - plain
+- id: q09
+  query: Can an order be cancelled after it has shipped?
+  relevant:
+  - cancellation#cancelling-after-shipping
+  tags:
+  - plain
+- id: q10
+  query: Are returns free or do I pay for shipping?
+  relevant:
+  - returns#return-shipping-fee
+  tags:
+  - plain
+- id: q11
+  query: Can I change the delivery address after the order has shipped?
+  relevant:
+  - address#when-the-address-can-be-changed
+  tags:
+  - plain
+- id: q12
+  query: How do I get a GST invoice?
+  relevant:
+  - payments#gst-invoices
+  tags:
+  - plain
+- id: q13
+  query: Which payment methods do you accept?
+  relevant:
+  - payments#payment-methods
+  tags:
+  - plain
+- id: q14
+  query: How long does delivery take to Mumbai?
+  relevant:
+  - shipping#delivery-times
+  tags:
+  - plain
+- id: q15
+  query: What is the warranty on electronics?
+  relevant:
+  - account_support#warranty-on-electronics
+  tags:
+  - plain
+- id: q16
+  query: What are the support chat hours?
+  relevant:
+  - account_support#support-hours
+  tags:
+  - plain
+- id: q17
+  query: Do you deliver outside India?
+  relevant:
+  - shipping#delivery-locations
+  tags:
+  - plain
+- id: q18
+  query: How many delivery attempts does the courier make?
+  relevant:
+  - shipping#delivery-attempts
+  tags:
+  - plain
+- id: q19
+  query: I want my money back, how soon will it reach my bank?
+  relevant:
+  - refunds#refund-timeline
+  - refunds#where-the-money-goes
+  tags:
+  - paraphrase
+- id: q20
+  query: Is there a limit above which a person has to approve my refund?
+  relevant:
+  - refunds#refund-approval-limits
+  tags:
+  - paraphrase
+- id: q21
+  query: my parcel is very late, what will you do about it
+  relevant:
+  - shipping#delayed-orders
+  tags:
+  - paraphrase
+- id: q22
+  query: the courier says delivered but nothing came
+  relevant:
+  - shipping#parcel-delivered-but-not-received
+  tags:
+  - paraphrase
+- id: q23
+  query: Item broke on arrival, what are my options?
+  relevant:
+  - damaged#what-we-do
+  - damaged#reporting-a-problem
+  tags:
+  - paraphrase
+- id: q24
+  query: Charged twice for one purchase
+  relevant:
+  - payments#failed-payments-and-double-charges
+  tags:
+  - paraphrase
+- id: q25
+  query: Can I send my order to a friend's house?
+  relevant:
+  - address#delivering-to-someone-else
+  tags:
+  - paraphrase
+- id: q26
+  query: What perks do premium members get?
+  relevant:
+  - account_support#gold-membership
+  tags:
+  - paraphrase
+- id: q27
+  query: one item missing from the box I received
+  relevant:
+  - damaged#missing-items-in-a-parcel
+  tags:
+  - paraphrase
+- id: q28
+  query: I only want to drop one thing from my order, not everything
+  relevant:
+  - cancellation#cancelling-part-of-an-order
+  tags:
+  - paraphrase
+- id: q29
+  query: Swap this for a bigger size
+  relevant:
+  - returns#exchanges
+  tags:
+  - paraphrase
+- id: q30
+  query: Which clothes can't be sent back?
+  relevant:
+  - returns#items-that-cannot-be-returned
+  tags:
+  - paraphrase
+- id: q31
+  query: Can I get store credit instead of cash back?
+  relevant:
+  - refunds#wallet-credit
+  tags:
+  - paraphrase
+- id: q32
+  query: Where do I see which courier has my package?
+  relevant:
+  - shipping#tracking-your-order
+  tags:
+  - paraphrase
+- id: q33
+  query: Someone else wants to pay on delivery with cash, is that allowed for a big order?
+  relevant:
+  - payments#cash-on-delivery-limit
+  tags:
+  - paraphrase
+- id: q34
+  query: refnd not recieved yet
+  relevant:
+  - refunds#refund-not-received
+  - refunds#refund-timeline
+  tags:
+  - messy
+- id: q35
+  query: pls cancel b4 shipping?? free?
+  relevant:
+  - cancellation#cancelling-before-shipping
+  tags:
+  - messy
+- id: q36
+  query: wrong pincode in my address how to fix
+  relevant:
+  - address#fixing-a-wrong-pincode-or-typo
+  tags:
+  - messy
+- id: q37
+  query: return pickup fee
+  relevant:
+  - returns#return-shipping-fee
+  tags:
+  - messy
+- id: q38
+  query: cod limit
+  relevant:
+  - payments#cash-on-delivery-limit
+  tags:
+  - messy
+- id: q39
+  query: gold return days
+  relevant:
+  - returns#return-window
+  - account_support#gold-membership
+  tags:
+  - messy
+- id: q40
+  query: delete my account
+  relevant:
+  - account_support#deleting-your-account-or-data
+  tags:
+  - messy
+- id: q41
+  query: I returned an item, will the pickup fee be taken from my refund?
+  relevant:
+  - returns#return-shipping-fee
+  - refunds#what-is-included-in-a-refund
+  tags:
+  - multi
+- id: q42
+  query: Cancelled before it shipped, do I get the delivery charge back and when?
+  relevant:
+  - refunds#what-is-included-in-a-refund
+  - refunds#refund-timeline
+  - cancellation#cancelling-before-shipping
+  tags:
+  - multi
+- id: q43
+  query: Can I pay with Bitcoin?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q44
+  query: Do you sell gift cards?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q45
+  query: What is the CEO's name?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q46
+  query: Do you have a physical store in Bhopal?
+  relevant: []
+  tags:
+  - unanswerable

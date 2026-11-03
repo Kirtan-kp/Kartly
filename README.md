@@ -239,6 +239,17 @@ To use it in the ticket flow set `KARTLY_ROUTER_MODEL=groq_small` (API) or pass 
 
 It reports intent and tier accuracy, Tier 3 recall for the whole router (and for the rules and the classifier alone), tickets routed too low or too high, unusable outputs, the confusion list, tokens, cost and latency, and appends a row to `evals/runs/routing_experiments.csv`. Prompt versions (`c1`, `c2`) stay selectable so you can compare them on the same cases digest. See ADR-032 and ADR-033.
 
+## Knowledge base and retrieval
+
+`kb/` holds eight synthetic policy files (returns, refunds, shipping, cancellation, address, payments, damaged items, account support), written for this demo store and not taken from any real company. Each `##` section is one chunk (long sections split on paragraphs), with the id `<file>#<heading-slug>`. Search is a pure-Python BM25 behind a small `Retriever` protocol, so a dense or fused retriever can replace it later. It is measured, not yet used by the agent:
+
+```bash
+python -m kartly.evals.retrieval                 # baseline numbers
+python -m kartly.evals.retrieval --show          # per-question outcomes
+```
+
+`evals/retrieval/queries.yaml` has 46 questions, each labelled with the chunk that answers it (plain, paraphrase, messy, multi-chunk, and four that the KB cannot answer). The report gives hit@1/3/5, recall@5 and MRR overall and per tag, plus the score range of answerable versus unanswerable questions, which is the basis for a "no answer" threshold. Each run appends a row to `evals/runs/retrieval_experiments.csv`; rows are comparable only when the KB and question digests match. See ADR-035.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
@@ -262,7 +273,7 @@ kartly-agent/
     routing/             # hard rules, classifier, model selection
     llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
     context/             # context builder, summarizer, memory
-    retrieval/           # chunking, hybrid search, reranker
+    retrieval/           # chunking, BM25 baseline  <- built; dense, fusion, reranker next
     gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read tools)
     tools/               # tool implementations over the mock store         <- built (read tools)
     guards/              # injection screen, PII redaction, output validation
@@ -270,8 +281,8 @@ kartly-agent/
     approvals/           # approval queue and decisions
     observability/       # tracing, metrics, replay
     admin/               # minimal server-rendered admin UI
+  kb/                    # synthetic policy documents  <- built
   data/
-    kb/                  # policy and FAQ documents
   evals/
     golden/              # tickets plus expected outcomes
     graders/             # state-based graders, LLM judge
