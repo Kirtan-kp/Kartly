@@ -235,6 +235,8 @@ python -m kartly.evals.classify --model local_small
 python -m kartly.evals.classify --model groq_small --pause 5 --classifier-version c1   # compare prompts
 ```
 
+To use it in the ticket flow set `KARTLY_ROUTER_MODEL=groq_small` (API) or pass `--router groq_small` (`python -m kartly.orchestrator`, `python -m kartly.evals`). A Tier 3 label then sends the ticket to a human before the resolver runs, and the label call is recorded as trace step `classify`. It is off by default. ADR-034 has the measured numbers behind that choice.
+
 It reports intent and tier accuracy, Tier 3 recall for the whole router (and for the rules and the classifier alone), tickets routed too low or too high, unusable outputs, the confusion list, tokens, cost and latency, and appends a row to `evals/runs/routing_experiments.csv`. Prompt versions (`c1`, `c2`) stay selectable so you can compare them on the same cases digest. See ADR-032 and ADR-033.
 
 ## Planned stack

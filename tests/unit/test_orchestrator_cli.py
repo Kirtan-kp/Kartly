@@ -153,3 +153,15 @@ def test_an_unmigrated_database_gives_a_hint_not_a_traceback(
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     assert main(config(tmp_path, fake_server)) == 2
     assert "alembic upgrade head" in capsys.readouterr().err
+
+
+def test_a_router_can_be_named_and_its_label_call_is_in_the_trace(
+    db: Engine,
+    fake_server: FakeOpenAIServer,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main([*config(tmp_path, fake_server), "--router", "fake_small"])
+    out = capsys.readouterr().out
+    assert "classify: FAILED" in out  # the fake model does not answer in labels; it carried on
+    assert fake_server.requests[0]["body"]["response_format"] == {"type": "json_object"}

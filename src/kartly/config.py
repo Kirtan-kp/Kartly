@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     default_model: str | None = (
         None  # a name from models.yaml; default: first model of role "small"
     )
+    # A model from models.yaml that labels each ticket (intent, tier) before the resolver runs,
+    # sending Tier 3 to a human. Empty means no model router (the rules still run).
+    router_model: str | None = None
     max_workers: int = 2  # tickets processed at the same time
     max_pending_runs: int = 20  # running + queued; beyond this the API answers 503
 

@@ -166,3 +166,23 @@ def test_a_tier_3_ticket_is_closed_and_audited_on_postgres(
     assert step["name"] == "route" and step["input"]["categories"] == ["legal", "fraud"]
     [audit] = trace["audit"]
     assert audit["action"] == "route.escalated"
+
+
+def test_a_router_label_and_hold_are_stored_on_postgres(
+    pg_factory: sessionmaker[Session], pg_gateway: ToolGateway
+) -> None:
+    label = (
+        '{"intent": "escalation", "tier": 3, "complexity": "simple", '
+        '"sentiment": "angry", "confidence": 0.9}'
+    )
+    router = ScriptedClient([make_response(label, prompt_tokens=500, completion_tokens=40)])
+    resolver = ScriptedClient([])
+    runner = TicketRunner(pg_factory, resolver, pg_gateway, router=router)
+    summary = runner.run(runner.create_ticket("C-0001", "A charge I do not recognise"))
+    assert summary.stop_reason is StopReason.ROUTED_TIER3 and resolver.calls == []
+    with pg_factory() as session:
+        trace = load_trace(session, summary.run_id)
+    assert trace is not None and trace["run"]["tokens_in"] == 500
+    assert [(s["idx"], s["name"]) for s in trace["steps"]] == [(0, "classify"), (1, "route")]
+    assert trace["steps"][0]["output"]["intent"] == "escalation"
+    assert trace["audit"][0]["details"]["source"] == "classifier"

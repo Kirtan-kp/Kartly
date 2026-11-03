@@ -13,6 +13,7 @@ Exit codes: 0 every case passed, 1 a case failed or errored, 2 a configuration p
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -58,6 +59,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="turn the injection screen off, to measure the model's own resistance",
     )
+    parser.add_argument(
+        "--router",
+        help="also run the routing classifier with this model (a Tier 3 label escalates; "
+        "cases that expect a draft for such tickets will then fail)",
+    )
     parser.add_argument("--no-save", action="store_true", help="print only; write no files")
     parser.add_argument("--note", default="", help="a short label stored in the experiment log")
     parser.add_argument("--show-replies", action="store_true", help="also print passing replies")
@@ -85,6 +91,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         registry = ModelRegistry.from_yaml(args.config or get_settings().models_config_path)
         client = registry.client(args.model)
+        router = registry.client(args.router) if args.router else None
     except LLMConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -99,7 +106,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "(each on a fresh in-memory store) ...",
         flush=True,
     )
-    with client:
+    with client, contextlib.ExitStack() as stack:
+        if router is not None:
+            stack.enter_context(router)
         results = run_suite(
             cases,
             lambda _case: client,
@@ -107,12 +116,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             repeat=args.repeat,
             pause_s=args.pause,
             screen=not args.no_screen,
+            router=router,
             on_result=show,
         )
     summary = summarize(results, cases, args.model)
     print()
     print(format_summary(summary))
     if not args.no_save:
-        path = save_run(results, summary, Path(args.out), note=args.note)
+        note = args.note or (f"router={args.router}" if args.router else "")
+        path = save_run(results, summary, Path(args.out), note=note)
         print(f"\nSaved {path} and a row in {Path(args.out) / 'experiments.csv'}")
     return 0 if summary.failed == 0 and summary.errored == 0 else 1

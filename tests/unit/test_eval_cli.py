@@ -209,3 +209,50 @@ def test_the_model_client_is_closed_afterwards(
     config = write_models_config(tmp_path, fake_server.base_url)
     main(args(config, tmp_path, "--only", "tracking-in-transit", "--no-save"))
     assert closed == ["fake_small"]
+
+
+def test_a_router_model_is_passed_to_the_runner_closed_afterwards_and_noted(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_server: FakeOpenAIServer,
+    tmp_path: Path,
+) -> None:
+    from kartly.llm import OpenAICompatClient
+
+    seen: dict[str, Any] = {}
+    closed: list[str] = []
+    real_close = OpenAICompatClient.close
+
+    def spy(cases: Any, client_for: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return run_suite(cases, client_for, **kwargs)
+
+    def close(self: OpenAICompatClient) -> None:
+        closed.append(self.name)
+        real_close(self)
+
+    monkeypatch.setattr("kartly.evals.cli.run_suite", spy)
+    monkeypatch.setattr(OpenAICompatClient, "close", close)
+    fake_server.responder = good_tracking_model
+    config = write_models_config(tmp_path, fake_server.base_url)
+    code = main(args(config, tmp_path, "--only", "tracking-in-transit", "--router", "fake_small"))
+    assert seen["router"] is not None and seen["router"].name == "fake_small"
+    assert closed.count("fake_small") == 2  # the model and the router
+    [row] = list(csv.DictReader((tmp_path / "runs" / "experiments.csv").open(encoding="utf-8")))
+    assert row["note"] == "router=fake_small"
+    assert code in (0, 1)  # the fake router's reply is not a label: the run carries on
+
+
+def test_no_router_by_default(
+    monkeypatch: pytest.MonkeyPatch, fake_server: FakeOpenAIServer, tmp_path: Path
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def spy(cases: Any, client_for: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return run_suite(cases, client_for, **kwargs)
+
+    monkeypatch.setattr("kartly.evals.cli.run_suite", spy)
+    fake_server.responder = good_tracking_model
+    config = write_models_config(tmp_path, fake_server.base_url)
+    main(args(config, tmp_path, "--only", "tracking-in-transit", "--no-save"))
+    assert seen["router"] is None

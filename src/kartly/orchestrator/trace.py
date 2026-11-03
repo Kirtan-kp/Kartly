@@ -85,9 +85,18 @@ def _describe_step(step: dict[str, Any]) -> str:
         args = (step["input"] or {}).get("arguments")
         status = "ok" if output.get("ok") else f"error {output.get('error_code') or step['error']}"
         return f"{step['name']}({args}) -> {status}"
+    if step["kind"] == "stage" and step["name"] == "classify":
+        if output.get("failed"):
+            return f"classify: FAILED ({output.get('error')}), carried on without a label"
+        return (
+            f"classify: {output.get('intent')}, tier {output.get('tier')}, "
+            f"{output.get('sentiment')}, confidence {output.get('confidence')}"
+        )
     if step["kind"] == "stage":
         given = step["input"] or {}
         rules = ", ".join(given.get("rules") or given.get("categories") or [])
+        if given.get("source") == "classifier":
+            rules = f"classifier says {given.get('intent')}"
         return f"{step['name']}: held for a human ({rules})" if rules else str(step["name"])
     return str(step["name"])
 

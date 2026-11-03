@@ -32,9 +32,12 @@ def create_app_from_env() -> FastAPI:
     registry = ModelRegistry.from_yaml(settings.models_config_path)
     model_name = settings.default_model or registry.chain("small")[0]
     client = registry.client(model_name)
+    router = registry.client(settings.router_model) if settings.router_model else None
     engine = make_engine()
     factory = make_session_factory(engine)
-    runner = TicketRunner(factory, client, ToolGateway(factory), model_tier=model_name)
+    runner = TicketRunner(
+        factory, client, ToolGateway(factory), model_tier=model_name, router=router
+    )
     state = ApiState(
         session_factory=factory,
         runner=runner,
@@ -44,6 +47,8 @@ def create_app_from_env() -> FastAPI:
 
     def cleanup() -> None:
         client.close()
+        if router is not None:
+            router.close()
         engine.dispose()
 
     return create_app(state, on_shutdown=cleanup)

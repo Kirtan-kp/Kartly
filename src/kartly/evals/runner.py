@@ -150,6 +150,7 @@ def run_case(
     budget: RunBudget | None = None,
     attempt: int = 1,
     screen: bool = True,
+    router: ChatClient | None = None,
 ) -> CaseResult:
     engine = make_sqlite_engine()
     try:
@@ -167,6 +168,7 @@ def run_case(
             model_tier=model_name,
             budget=budget,
             screen=screen_text if screen else None,
+            router=router,
         )
         try:
             ticket_id = runner.create_ticket(case.customer_id, case.message)
@@ -220,6 +222,7 @@ def run_suite(
     pause_s: float = 0.0,
     budget: RunBudget | None = None,
     screen: bool = True,
+    router: ChatClient | None = None,
     on_result: Callable[[CaseResult], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[CaseResult]:
@@ -235,6 +238,7 @@ def run_suite(
                 budget=budget,
                 attempt=attempt,
                 screen=screen,
+                router=router,
             )
             results.append(result)
             if on_result is not None:

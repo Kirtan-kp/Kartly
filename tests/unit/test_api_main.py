@@ -33,6 +33,7 @@ def _no_kartly_settings_from_the_environment(monkeypatch: pytest.MonkeyPatch) ->
     for name in (
         "KARTLY_API_KEY",
         "KARTLY_DEFAULT_MODEL",
+        "KARTLY_ROUTER_MODEL",
         "KARTLY_MAX_WORKERS",
         "KARTLY_MAX_PENDING_RUNS",
         "KARTLY_MODELS_CONFIG_PATH",
@@ -92,6 +93,49 @@ def test_a_ticket_goes_through_http_the_model_the_gateway_and_the_database(
         assert audit.actor_type.value == "agent"
 
     assert len(fake_server.requests) == 2
+
+
+def test_a_router_model_from_the_settings_labels_each_ticket_and_is_closed_at_shutdown(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine, fake_server: FakeOpenAIServer, tmp_path: Path
+) -> None:
+    config = write_models_config(tmp_path, fake_server.base_url)
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(
+            models_config_path=str(config), api_key=KEY, router_model="fake_small"
+        ),
+    )
+    closed: list[str] = []
+    real_close = OpenAICompatClient.close
+
+    def close_client(self: OpenAICompatClient) -> None:
+        closed.append(self.name)
+        real_close(self)
+
+    monkeypatch.setattr(OpenAICompatClient, "close", close_client)
+    with TestClient(create_app_from_env()) as http:
+        body = http.post(
+            "/v1/tickets?wait=true",
+            json={"customer_id": "C-0001", "message": "Where is KRT-100002?"},
+            headers={"X-API-Key": KEY},
+        ).json()
+        trace = http.get(f"/v1/runs/{body['run_id']}/trace", headers={"X-API-Key": KEY}).json()
+    # The first request is the label call (JSON mode); the fake model's reply is not a label,
+    # so the ticket carried on and was answered, with the failed label recorded in the trace.
+    assert fake_server.requests[0]["body"]["response_format"] == {"type": "json_object"}
+    assert [s["name"] for s in trace["steps"]][:2] == ["classify", "chat"]
+    assert trace["steps"][0]["output"]["failed"] is True and body["outcome"] == "drafted"
+    assert closed.count("fake_small") == 2
+
+
+def test_no_router_unless_configured(wired: Engine, fake_server: FakeOpenAIServer) -> None:
+    with TestClient(create_app_from_env()) as http:
+        http.post(
+            "/v1/tickets?wait=true",
+            json={"customer_id": "C-0001", "message": "hi"},
+            headers={"X-API-Key": KEY},
+        )
+    assert "response_format" not in fake_server.requests[0]["body"]
 
 
 def test_the_worker_limits_come_from_the_settings(wired: Engine) -> None:
