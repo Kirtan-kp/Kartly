@@ -31,11 +31,12 @@ from kartly.gateway import ToolGateway
 from kartly.guards import screen_text
 from kartly.llm import ChatClient
 from kartly.orchestrator import RunBudget, TicketRunner, load_trace
-from kartly.orchestrator.prompts import PROMPT_VERSION
+from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, prompt_version
 from kartly.sanitize import clean_str
 from kartly.store.models import Action, Customer, Order, OrderItem, Shipment
 from kartly.store.seed import seed_mock_store
 from kartly.store.sqlite import make_sqlite_engine
+from kartly.tools import Tool
 
 EVAL_NOW = datetime(2026, 10, 23, 12, 0, 0, tzinfo=UTC)
 # What the agent must not change while answering a question. Tickets, messages, runs and the
@@ -151,6 +152,8 @@ def run_case(
     attempt: int = 1,
     screen: bool = True,
     router: ChatClient | None = None,
+    tools: Sequence[Tool] | None = None,
+    policy_prompt: str = DEFAULT_POLICY_PROMPT,
 ) -> CaseResult:
     engine = make_sqlite_engine()
     try:
@@ -160,7 +163,7 @@ def run_case(
             session.commit()
         with factory() as session:  # a fresh session: rows as the database stores them
             before = snapshot_store(session)
-        gateway = ToolGateway(factory, clock=lambda: EVAL_NOW)
+        gateway = ToolGateway(factory, tools, clock=lambda: EVAL_NOW)
         runner = TicketRunner(
             factory,
             client,
@@ -169,6 +172,7 @@ def run_case(
             budget=budget,
             screen=screen_text if screen else None,
             router=router,
+            policy_prompt=policy_prompt,
         )
         try:
             ticket_id = runner.create_ticket(case.customer_id, case.message)
@@ -223,6 +227,8 @@ def run_suite(
     budget: RunBudget | None = None,
     screen: bool = True,
     router: ChatClient | None = None,
+    tools: Sequence[Tool] | None = None,
+    policy_prompt: str = DEFAULT_POLICY_PROMPT,
     on_result: Callable[[CaseResult], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[CaseResult]:
@@ -239,6 +245,8 @@ def run_suite(
                 attempt=attempt,
                 screen=screen,
                 router=router,
+                tools=tools,
+                policy_prompt=policy_prompt,
             )
             results.append(result)
             if on_result is not None:
@@ -290,7 +298,14 @@ def cases_digest(cases: Iterable[Case]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:8]
 
 
-def summarize(results: Sequence[CaseResult], cases: Sequence[Case], model_name: str) -> Summary:
+def summarize(
+    results: Sequence[CaseResult],
+    cases: Sequence[Case],
+    model_name: str,
+    *,
+    policy: bool = False,
+    policy_prompt: str = DEFAULT_POLICY_PROMPT,
+) -> Summary:
     graded = [r for r in results if r.status != "error"]
     ok = [r for r in graded if r.status == "pass"]
     tier0 = [r for r in graded if r.tier == 0]
@@ -302,7 +317,7 @@ def summarize(results: Sequence[CaseResult], cases: Sequence[Case], model_name: 
     times = [r.latency_s for r in graded]
     return Summary(
         model=model_name,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version(policy, policy_prompt),
         cases_digest=cases_digest(cases),
         cases=len(cases),
         attempts=len(results),

@@ -282,3 +282,165 @@
   relevant: []
   tags:
   - unanswerable
+- id: q47
+  query: I bought a dress in the sale, can I still send it back?
+  relevant:
+  - returns#items-bought-on-sale
+  tags:
+  - paraphrase
+- id: q48
+  query: How much will it cost me to send back something that just doesn't fit?
+  relevant:
+  - returns#return-shipping-fee
+  tags:
+  - paraphrase
+- id: q49
+  query: courier says delivered but box never came
+  relevant:
+  - shipping#parcel-delivered-but-not-received
+  tags:
+  - messy
+- id: q50
+  query: Can I get the money as store credit rather than in my bank?
+  relevant:
+  - refunds#wallet-credit
+  tags:
+  - paraphrase
+- id: q51
+  query: Is there a maximum order value for paying cash on delivery?
+  relevant:
+  - payments#cash-on-delivery-limit
+  tags:
+  - plain
+- id: q52
+  query: I changed my mind about one of the three things in my order, can I drop just that one?
+  relevant:
+  - cancellation#cancelling-part-of-an-order
+  tags:
+  - paraphrase
+- id: q53
+  query: kitna time lagega refund aane mein
+  relevant:
+  - refunds#refund-timeline
+  tags:
+  - messy
+  - hinglish
+- id: q54
+  query: Wrong size was delivered, what do I do now and by when?
+  relevant:
+  - damaged#reporting-a-problem
+  - damaged#what-we-do
+  tags:
+  - multi
+- id: q55
+  query: Do you deliver on Sundays?
+  relevant:
+  - shipping#delivery-days
+  tags:
+  - plain
+- id: q56
+  query: My phone number changed, how do I update it?
+  relevant:
+  - account_support#changing-your-email-or-phone
+  tags:
+  - paraphrase
+- id: q57
+  query: How long do I have to complain if the item arrived broken?
+  relevant:
+  - damaged#reporting-a-problem
+  tags:
+  - paraphrase
+- id: q58
+  query: Who repairs my laptop if it stops working after three months?
+  relevant:
+  - account_support#warranty-on-electronics
+  tags:
+  - paraphrase
+- id: q59
+  query: I am owed 2500 rupees back, will a person check it before it is sent?
+  relevant:
+  - refunds#refund-approval-limits
+  tags:
+  - paraphrase
+- id: q60
+  query: Can my friend receive the parcel at her place if I order it for her?
+  relevant:
+  - address#delivering-to-someone-else
+  tags:
+  - paraphrase
+- id: q61
+  query: What if the courier came three times and I was never home?
+  relevant:
+  - shipping#delivery-attempts
+  tags:
+  - paraphrase
+- id: q62
+  query: paid 2 times for same order pls fix
+  relevant:
+  - payments#failed-payments-and-double-charges
+  tags:
+  - messy
+- id: q63
+  query: I need a tax invoice with my company GSTIN on it
+  relevant:
+  - payments#gst-invoices
+  tags:
+  - plain
+- id: q64
+  query: What do I get if I become a Gold member?
+  relevant:
+  - account_support#gold-membership
+  tags:
+  - plain
+- id: q65
+  query: I cancelled my cash on delivery order, where is my refund?
+  relevant:
+  - cancellation#cancelling-a-cash-on-delivery-order
+  tags:
+  - paraphrase
+- id: q66
+  query: I want to swap my shirt for a bigger one
+  relevant:
+  - returns#exchanges
+  tags:
+  - paraphrase
+- id: q67
+  query: Do you offer EMI or buy now pay later?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q68
+  query: Can I return something at a Kartly store?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q69
+  query: Do you price match other websites?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q70
+  query: How do I become a seller on Kartly?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q71
+  query: What is the battery life of the wireless headphones?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q72
+  query: Can I pick a time slot for delivery?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q73
+  query: Is there a Windows app for Kartly?
+  relevant: []
+  tags:
+  - unanswerable
+- id: q74
+  query: How do I report a bug on the website?
+  relevant: []
+  tags:
+  - unanswerable

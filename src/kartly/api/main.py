@@ -17,6 +17,8 @@ from kartly.config import get_settings, load_env
 from kartly.gateway import ToolGateway
 from kartly.llm import LLMConfigError, ModelRegistry
 from kartly.orchestrator import TicketRunner
+from kartly.retrieval import EmbeddingError, KnowledgeBaseError
+from kartly.retrieval.setup import gateway_tools
 from kartly.store.db import make_engine, make_session_factory
 
 
@@ -36,7 +38,11 @@ def create_app_from_env() -> FastAPI:
     engine = make_engine()
     factory = make_session_factory(engine)
     runner = TicketRunner(
-        factory, client, ToolGateway(factory), model_tier=model_name, router=router
+        factory,
+        client,
+        ToolGateway(factory, gateway_tools(settings)),
+        model_tier=model_name,
+        router=router,
     )
     state = ApiState(
         session_factory=factory,
@@ -61,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         app = create_app_from_env()
-    except (LLMConfigError, ValueError) as exc:
+    except (LLMConfigError, ValueError, KnowledgeBaseError, EmbeddingError) as exc:
         print(f"error: {exc}")
         return 2
     uvicorn.run(app, host=args.host, port=args.port)

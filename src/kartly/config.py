@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     # A model from models.yaml that labels each ticket (intent, tier) before the resolver runs,
     # sending Tier 3 to a human. Empty means no model router (the rules still run).
     router_model: str | None = None
+    # Policy search (the search_policy tool). Set kb_dir (for example "kb") to enable it; it needs
+    # an Ollama embedding model (ollama pull nomic-embed-text). min_score is a dense cosine
+    # cut-off: below it the tool reports "no policy found" (ADR-037).
+    kb_dir: str | None = None
+    embed_model: str = "nomic-embed-text"
+    ollama_url: str = "http://localhost:11434"
+    policy_min_score: float = 0.67
     max_workers: int = 2  # tickets processed at the same time
     max_pending_runs: int = 20  # running + queued; beyond this the API answers 503
 

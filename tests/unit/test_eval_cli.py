@@ -256,3 +256,79 @@ def test_no_router_by_default(
     config = write_models_config(tmp_path, fake_server.base_url)
     main(args(config, tmp_path, "--only", "tracking-in-transit", "--no-save"))
     assert seen["router"] is None
+
+
+def test_kb_gives_the_runner_the_policy_tool_and_is_noted(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_server: FakeOpenAIServer,
+    tmp_path: Path,
+) -> None:
+    from kartly.tools import Tool
+
+    seen: dict[str, Any] = {}
+
+    def spy(cases: Any, client_for: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return run_suite(cases, client_for, **{**kwargs, "pause_s": 0.0})
+
+    class Unit:
+        name = "unit"
+
+        def embed_documents(self, texts: Any) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [1.0, 0.0]
+
+    monkeypatch.setattr("kartly.evals.cli.run_suite", spy)
+    monkeypatch.setattr("kartly.retrieval.setup.OllamaEmbedder", lambda *a, **k: Unit())
+    fake_server.responder = good_tracking_model
+    config = write_models_config(tmp_path, fake_server.base_url)
+    kb = str(Path(__file__).resolve().parents[2] / "kb")
+    main(args(config, tmp_path, "--only", "tracking-in-transit", "--kb", kb))
+    tools: list[Tool] = list(seen["tools"])
+    assert "search_policy" in [t.name for t in tools] and "get_order" in [t.name for t in tools]
+    log = (tmp_path / "runs" / "experiments.csv").read_text(encoding="utf-8")
+    assert "kb=" in log and "v1+policy" in log
+
+    assert seen["policy_prompt"] == "p1"
+    main(
+        args(
+            config,
+            tmp_path,
+            "--only",
+            "tracking-in-transit",
+            "--kb",
+            kb,
+            "--policy-prompt",
+            "p2",
+            "--note",
+            "p2 try",
+        )  # fmt: skip
+    )
+    assert seen["policy_prompt"] == "p2"
+    assert "v1+policy-p2" in (tmp_path / "runs" / "experiments.csv").read_text(encoding="utf-8")
+
+    main(args(config, tmp_path, "--only", "tracking-in-transit", "--no-save"))
+    assert seen["tools"] is None
+
+
+def test_a_bad_kb_is_a_clean_error(
+    fake_server: FakeOpenAIServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = write_models_config(tmp_path, fake_server.base_url)
+    assert main(args(config, tmp_path, "--kb", str(tmp_path / "missing"))) == 2
+    assert "error:" in capsys.readouterr().err
+    assert fake_server.requests == []
+
+
+def test_cases_that_need_the_policy_tool_refuse_to_run_without_kb(
+    fake_server: FakeOpenAIServer, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = write_models_config(tmp_path, fake_server.base_url)
+    policy = str(Path(__file__).resolve().parents[2] / "evals" / "golden_policy")
+    assert main(args(config, tmp_path, "--cases", policy)) == 2
+    err = capsys.readouterr().err
+    assert "--kb kb" in err and "policy-refund-timeline" in err
+    assert fake_server.requests == []
+    assert main(["--cases", policy, "--list"]) == 0  # listing needs no tool

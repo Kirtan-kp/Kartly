@@ -24,6 +24,8 @@ from kartly.gateway import ToolGateway
 from kartly.llm import LLMConfigError, ModelRegistry
 from kartly.orchestrator.service import TicketRunner, UnknownCustomerError
 from kartly.orchestrator.trace import format_trace, load_trace
+from kartly.retrieval import EmbeddingError, KnowledgeBaseError
+from kartly.retrieval.setup import gateway_tools
 from kartly.sanitize import clean_str
 from kartly.store.db import make_engine, make_session_factory
 
@@ -54,14 +56,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             router = stack.enter_context(registry.client(args.router)) if args.router else None
             runner = TicketRunner(
-                factory, client, ToolGateway(factory), model_tier=args.model, router=router
+                factory,
+                client,
+                ToolGateway(factory, gateway_tools(settings)),
+                model_tier=args.model,
+                router=router,
             )
             ticket_id = runner.create_ticket(args.customer, args.message)
             print(f"Running {args.model} for customer {args.customer} ...", flush=True)
             summary = runner.run(ticket_id)
             with factory() as session:
                 trace = load_trace(session, summary.run_id)
-    except LLMConfigError as exc:
+    except (LLMConfigError, KnowledgeBaseError, EmbeddingError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except UnknownCustomerError as exc:

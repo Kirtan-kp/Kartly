@@ -1,0 +1,48 @@
+"""Build the policy-search tool from settings, for the API, the CLI and the evals."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from kartly.config import Settings
+from kartly.retrieval.chunking import KnowledgeBaseError, load_kb
+from kartly.retrieval.dense import DenseRetriever, Embedder, OllamaEmbedder
+from kartly.tools import default_tools
+from kartly.tools.base import Tool
+from kartly.tools.policy import policy_tool
+
+
+def build_policy_tools(
+    kb_dir: str,
+    *,
+    embed_model: str,
+    ollama_url: str,
+    min_score: float,
+    cache_path: Path | None = None,
+    embedder: Embedder | None = None,
+) -> tuple[Tool, ...]:
+    """Embed the knowledge base and return the ``search_policy`` tool.
+
+    Raises ``KnowledgeBaseError`` for a bad KB and ``EmbeddingError`` if Ollama cannot embed it,
+    so a misconfigured server fails at start-up, not on the first customer question.
+    """
+    chunks = load_kb(kb_dir)
+    if not chunks:
+        raise KnowledgeBaseError(f"{kb_dir}: no knowledge-base chunks found")
+    emb = embedder or OllamaEmbedder(embed_model, ollama_url, cache_path=cache_path)
+    return (policy_tool(DenseRetriever(chunks, emb), min_score=min_score),)
+
+
+def gateway_tools(settings: Settings, *, cache_dir: Path | None = None) -> tuple[Tool, ...]:
+    """The default tools, plus ``search_policy`` when ``KARTLY_KB_DIR`` is set."""
+    tools = default_tools()
+    if not settings.kb_dir:
+        return tools
+    cache = (cache_dir or Path("evals/runs")) / "embedding_cache.json"
+    return tools + build_policy_tools(
+        settings.kb_dir,
+        embed_model=settings.embed_model,
+        ollama_url=settings.ollama_url,
+        min_score=settings.policy_min_score,
+        cache_path=cache,
+    )

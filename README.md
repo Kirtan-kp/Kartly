@@ -246,9 +246,17 @@ It reports intent and tier accuracy, Tier 3 recall for the whole router (and for
 ```bash
 python -m kartly.evals.retrieval                 # baseline numbers
 python -m kartly.evals.retrieval --show          # per-question outcomes
+python -m kartly.evals.retrieval --retriever dense    # embeddings via Ollama (ollama pull nomic-embed-text)
+python -m kartly.evals.retrieval --retriever hybrid   # BM25 + dense, reciprocal rank fusion
 ```
 
-`evals/retrieval/queries.yaml` has 46 questions, each labelled with the chunk that answers it (plain, paraphrase, messy, multi-chunk, and four that the KB cannot answer). The report gives hit@1/3/5, recall@5 and MRR overall and per tag, plus the score range of answerable versus unanswerable questions, which is the basis for a "no answer" threshold. Each run appends a row to `evals/runs/retrieval_experiments.csv`; rows are comparable only when the KB and question digests match. See ADR-035.
+Dense search embeds each chunk and question with an Ollama embedding model (`--embed-model`, default `nomic-embed-text`; vectors are cached in `evals/runs/embedding_cache.json`, so re-runs are instant). The agent can use this search: set `KARTLY_KB_DIR=kb` (and optionally `KARTLY_EMBED_MODEL`, `KARTLY_OLLAMA_URL`, `KARTLY_POLICY_MIN_SCORE`) to give it the `search_policy` tool, or run `python -m kartly.evals --model NAME --kb kb`. Below the score cut-off the tool answers "nothing found" and the model is told to hand over to a colleague; the prompt version is then recorded as `v1+policy`. See ADR-037. Policy answers have their own golden cases (`python -m kartly.evals --model groq_small --cases evals/golden_policy --kb kb`, optionally `--policy-prompt p2`; ADR-038). Hybrid fusion adds up `1/(60 + rank)` votes from both rankings; its scores are vote totals, not similarities, so use the BM25 or dense score range for a "no answer" cut-off, not the fused one.
+
+`evals/retrieval/queries.yaml` has 74 questions, each labelled with the chunk that answers it (plain, paraphrase, messy, Hinglish, multi-chunk, and twelve that the KB cannot answer, some deliberately close to real topics). The report gives hit@1/3/5, recall@5 and MRR overall and per tag, plus the score range of answerable versus unanswerable questions and the cut-off that best separates them ("answer only if the best score is at least X"), which is the basis for a "no answer" threshold. Each run appends a row to `evals/runs/retrieval_experiments.csv`; rows are comparable only when the KB and question digests match. See ADR-035.
+
+## Grounding check
+
+A policy reply is checked before it is stored: every `[section]` it cites must be a chunk the search returned in that run, and every number with a unit (days, hours, rupees, percent) must appear in a tool result or in the customer's own message. A reply that fails is held for a human (run outcome `escalated`, stop reason `ungrounded`, audit row `guard.ungrounded_reply`); one that passes is stored without its citations. It does not check claims that contain no numbers. See ADR-039.
 
 ## Planned stack
 
@@ -273,10 +281,10 @@ kartly-agent/
     routing/             # hard rules, classifier, model selection
     llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
     context/             # context builder, summarizer, memory
-    retrieval/           # chunking, BM25 baseline  <- built; dense, fusion, reranker next
+    retrieval/           # chunking, BM25, dense, RRF fusion  <- built; reranker next
     gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read tools)
     tools/               # tool implementations over the mock store         <- built (read tools)
-    guards/              # injection screen, PII redaction, output validation
+    guards/              # injection screen, grounding check  <- built; PII redaction later
     store/               # DB models, migrations, seed data        <- built
     approvals/           # approval queue and decisions
     observability/       # tracing, metrics, replay

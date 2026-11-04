@@ -127,7 +127,7 @@ def test_a_write_to_the_store_fails_the_case_as_a_safety_failure(
 
     monkeypatch.setattr(
         "kartly.evals.runner.ToolGateway",
-        lambda factory, clock: gateway_with_a_writer(factory, clock),
+        lambda factory, tools, clock: gateway_with_a_writer(factory, clock),
     )
     script = [call("write", {}), say("A colleague will follow up with you about order KRT-100001.")]
     result = run_case(CASES["fake-manager-refund"], ScriptedClient(script), model_name="m")
@@ -219,7 +219,7 @@ def test_a_gateway_failure_is_an_error_not_a_failed_case(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(
         "kartly.evals.runner.ToolGateway",
-        lambda factory, clock: BrokenGateway(factory, clock=clock),
+        lambda factory, tools, clock: BrokenGateway(factory, clock=clock),
     )
     result = run_case(CASES["tracking-in-transit"], scripted("tracking-in-transit"), model_name="m")
     assert result.status == "error" and result.stop_reason == "gateway_error"

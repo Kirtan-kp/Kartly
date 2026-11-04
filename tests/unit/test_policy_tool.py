@@ -1,0 +1,371 @@
+"""The search_policy tool, its prompt rules and the settings that switch it on."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+from kartly.config import Settings
+from kartly.gateway import ToolGateway
+from kartly.orchestrator import TicketRunner
+from kartly.orchestrator.prompts import build_messages, prompt_version, system_prompt
+from kartly.retrieval import Chunk, EmbeddingError, Hit, KnowledgeBaseError
+from kartly.retrieval.setup import build_policy_tools, gateway_tools
+from kartly.store.models import AuditLog, Run
+from kartly.tools import RiskTier, default_tools
+from kartly.tools.policy import MAX_TEXT_CHARS, NOT_FOUND_MESSAGE, policy_tool
+from tests.llm_support import ScriptedClient, make_response, tool_call
+from tests.support import FIXED_NOW, make_ctx
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def chunk(cid: str, text: str = "Seven days.") -> Chunk:
+    return Chunk(id=cid, doc="returns", title="Returns", heading=cid, text=text)
+
+
+class FixedRetriever:
+    name = "fixed"
+
+    def __init__(self, hits: list[Hit]) -> None:
+        self._hits = hits
+        self.queries: list[tuple[str, int]] = []
+
+    def search(self, query: str, k: int = 5) -> list[Hit]:
+        self.queries.append((query, k))
+        return self._hits[:k]
+
+
+def gateway_with(
+    factory: sessionmaker[Session], hits: list[Hit], **kwargs: Any
+) -> tuple[ToolGateway, FixedRetriever]:
+    retriever = FixedRetriever(hits)
+    tool = policy_tool(retriever, min_score=0.5, **kwargs)
+    return ToolGateway(factory, [tool], clock=lambda: FIXED_NOW), retriever
+
+
+def search(gateway: ToolGateway, question: str = "how long to return?") -> dict[str, Any]:
+    result = gateway.call(make_ctx("C-0001"), "search_policy", {"question": question})
+    assert result.ok, result.message
+    assert result.data is not None
+    return result.data
+
+
+def test_found_results_carry_the_chunk_id_title_section_and_text(
+    seeded_factory: sessionmaker[Session],
+) -> None:
+    gateway, retriever = gateway_with(seeded_factory, [Hit(chunk("returns#return-window"), 0.9)])
+    data = search(gateway)
+    assert data == {
+        "found": True,
+        "results": [
+            {
+                "chunk_id": "returns#return-window",
+                "title": "Returns",
+                "section": "returns#return-window",
+                "text": "Seven days.",
+            }
+        ],
+    }
+    assert retriever.queries == [("how long to return?", 3)]
+
+
+def test_hits_below_the_threshold_are_dropped_and_the_threshold_itself_passes(
+    seeded_factory: sessionmaker[Session],
+) -> None:
+    hits = [Hit(chunk("a"), 0.9), Hit(chunk("b"), 0.5), Hit(chunk("c"), 0.49)]
+    gateway, _ = gateway_with(seeded_factory, hits)
+    assert [r["chunk_id"] for r in search(gateway)["results"]] == ["a", "b"]
+
+
+def test_nothing_above_the_threshold_says_so_and_tells_the_model_not_to_guess(
+    seeded_factory: sessionmaker[Session],
+) -> None:
+    gateway, _ = gateway_with(seeded_factory, [Hit(chunk("a"), 0.3)])
+    assert search(gateway) == {"found": False, "results": [], "message": NOT_FOUND_MESSAGE}
+    gateway, _ = gateway_with(seeded_factory, [])
+    assert search(gateway)["found"] is False
+    assert "colleague" in NOT_FOUND_MESSAGE and "guess" in NOT_FOUND_MESSAGE
+
+
+def test_the_number_of_results_is_capped(seeded_factory: sessionmaker[Session]) -> None:
+    hits = [Hit(chunk(c), 0.9) for c in "abcde"]
+    gateway, retriever = gateway_with(seeded_factory, hits, max_results=2)
+    assert len(search(gateway)["results"]) == 2 and retriever.queries[0][1] == 2
+    with pytest.raises(ValueError, match="max_results"):
+        policy_tool(retriever, min_score=0.5, max_results=0)
+
+
+def test_long_text_is_truncated(seeded_factory: sessionmaker[Session]) -> None:
+    gateway, _ = gateway_with(seeded_factory, [Hit(chunk("a", "x" * 5000), 0.9)])
+    text = search(gateway)["results"][0]["text"]
+    assert len(text) == MAX_TEXT_CHARS + 1 and text.endswith("…")  # the ellipsis marks the cut
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"question": "refunds?", "customer_id": "C-0002"},  # identity is never an argument
+        {"question": "ab"},
+        {"question": "x" * 301},
+        {},
+    ],
+)
+def test_bad_arguments_are_rejected_before_any_search(
+    seeded_factory: sessionmaker[Session], arguments: dict[str, Any]
+) -> None:
+    gateway, retriever = gateway_with(seeded_factory, [Hit(chunk("a"), 0.9)])
+    result = gateway.call(make_ctx("C-0001"), "search_policy", arguments)
+    assert not result.ok and retriever.queries == []
+
+
+def test_the_tool_is_read_only_and_every_call_is_audited(
+    seeded_factory: sessionmaker[Session],
+) -> None:
+    gateway, _ = gateway_with(seeded_factory, [Hit(chunk("a"), 0.9)])
+    search(gateway)
+    assert [t.tier for t in [policy_tool(FixedRetriever([]), min_score=0.5)]] == [
+        RiskTier.READ_ONLY
+    ]
+    with seeded_factory() as session:
+        [row] = session.scalars(select(AuditLog))
+        assert row.action == "tool.succeeded" and row.details is not None
+        assert row.details["tool"] == "search_policy"
+        assert row.details["args"] == {"question": "how long to return?"}
+
+
+# ------------------------------------------------------------------------- prompt
+
+
+def test_policy_rules_are_in_the_prompt_only_when_asked_for() -> None:
+    assert "search_policy" not in system_prompt()
+    assert "search_policy" in system_prompt(policy=True)
+    assert system_prompt(policy=True).startswith(system_prompt())
+    assert prompt_version() == "v1" and prompt_version(policy=True) == "v1+policy"
+    system = build_messages([], policy=True)[0]["content"]
+    assert "chunk_id" in system and "colleague will follow up" in system
+    assert build_messages([])[0]["content"] == system_prompt()
+
+
+def policy_runner(
+    factory: sessionmaker[Session], with_policy: bool, script: list[Any]
+) -> tuple[TicketRunner, ScriptedClient]:
+    tools = list(default_tools())
+    if with_policy:
+        tools.append(policy_tool(FixedRetriever([Hit(chunk("a"), 0.9)]), min_score=0.5))
+    client = ScriptedClient(script)
+    gateway = ToolGateway(factory, tools, clock=lambda: FIXED_NOW)
+    return TicketRunner(factory, client, gateway, model_tier="scripted"), client
+
+
+@pytest.mark.parametrize(("with_policy", "version"), [(True, "v1+policy"), (False, "v1")])
+def test_the_runner_adds_policy_rules_and_records_the_prompt_version_only_with_the_tool(
+    seeded_factory: sessionmaker[Session], with_policy: bool, version: str
+) -> None:
+    runner, client = policy_runner(seeded_factory, with_policy, [make_response("Hello.")])
+    runner.run(runner.create_ticket("C-0001", "How long do refunds take?"))
+    system = client.calls[0]["messages"][0]["content"]
+    assert ("search_policy" in system) is with_policy
+    with seeded_factory() as session:
+        assert session.scalars(select(Run)).one().prompt_version == version
+
+
+def test_a_policy_question_runs_end_to_end(seeded_factory: sessionmaker[Session]) -> None:
+    script = [
+        make_response(None, [tool_call("search_policy", {"question": "refund time"})]),
+        make_response("Refunds take seven days. [a]"),
+    ]
+    runner, client = policy_runner(seeded_factory, True, script)
+    summary = runner.run(runner.create_ticket("C-0001", "How long do refunds take?"))
+    assert summary.stop_reason.value == "answered"
+    tool_message = client.calls[1]["messages"][-1]
+    assert tool_message["role"] == "tool" and '"found":true' in tool_message["content"].lower()
+
+
+# ------------------------------------------------------------------------- setup
+
+
+class UnitEmbedder:
+    name = "unit"
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return [1.0, 0.0]
+
+
+def test_build_policy_tools_embeds_the_real_kb_and_returns_the_tool() -> None:
+    [tool] = build_policy_tools(
+        str(ROOT / "kb"),
+        embed_model="m",
+        ollama_url="http://unused",
+        min_score=0.5,
+        embedder=UnitEmbedder(),
+    )
+    assert tool.name == "search_policy"
+
+
+def test_an_empty_knowledge_base_is_an_error_not_a_silent_no_op(tmp_path: Path) -> None:
+    with pytest.raises((KnowledgeBaseError, FileNotFoundError, ValueError)):
+        build_policy_tools(
+            str(tmp_path), embed_model="m", ollama_url="http://unused", min_score=0.5,
+            embedder=UnitEmbedder(),
+        )  # fmt: skip
+
+
+def test_gateway_tools_adds_policy_search_only_when_a_kb_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    plain = Settings(kb_dir=None)
+    assert [t.name for t in gateway_tools(plain)] == [t.name for t in default_tools()]
+    unreachable = Settings(kb_dir=str(ROOT / "kb"), ollama_url="http://127.0.0.1:1")
+    with pytest.raises(EmbeddingError):  # fails at start-up, not on the first customer question
+        gateway_tools(unreachable, cache_dir=tmp_path)
+
+
+def test_settings_defaults_keep_policy_search_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)  # no .env here
+    for name in ("KARTLY_KB_DIR", "KARTLY_EMBED_MODEL", "KARTLY_POLICY_MIN_SCORE"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings()
+    assert s.kb_dir is None and s.embed_model == "nomic-embed-text"
+    assert s.policy_min_score == 0.67
+
+
+def test_run_case_gives_the_policy_tool_to_the_gateway(
+    seeded_factory: sessionmaker[Session],
+) -> None:
+    from kartly.evals import load_cases
+    from kartly.evals.runner import run_case
+
+    case = next(c for c in load_cases(ROOT / "evals" / "golden") if c.id == "tracking-in-transit")
+    tool = policy_tool(FixedRetriever([Hit(chunk("a"), 0.9)]), min_score=0.5)
+    script = [
+        make_response(None, [tool_call("search_policy", {"question": "refund time"})]),
+        make_response("Your order is in transit."),
+    ]
+    result = run_case(case, ScriptedClient(script), model_name="m", tools=[*default_tools(), tool])
+    [call] = result.tool_calls
+    assert (call.name, call.ok) == ("search_policy", True)
+
+
+# ----------------------------------------------------------------- policy golden cases
+
+POLICY_CASES = ROOT / "evals" / "golden_policy"
+
+
+def test_policy_golden_cases_load_and_every_policy_answer_requires_the_search() -> None:
+    from kartly.evals import load_cases
+
+    cases = load_cases(POLICY_CASES)
+    assert len({c.id for c in cases}) == len(cases) == 10
+    answered = [c for c in cases if c.expect.outcome == "drafted"]
+    assert len(answered) == 9
+    for c in answered:
+        assert any("search_policy" in m.any_of for m in c.expect.calls), c.id
+    unanswerable = {c.id for c in cases if "unanswerable" in c.tags}
+    assert unanswerable == {
+        "policy-unanswerable-price-match",
+        "policy-near-miss-store-return",
+        "policy-near-miss-time-slot",
+    }
+
+
+def run_policy_case(
+    case_id: str,
+    reply: str,
+    question: str = "policy question",
+    found: Chunk | None = None,
+) -> Any:
+    from kartly.evals import load_cases
+    from kartly.evals.runner import run_case
+
+    case = next(c for c in load_cases(POLICY_CASES) if c.id == case_id)
+    returned = found or chunk("returns#return-window")
+    tool = policy_tool(FixedRetriever([Hit(returned, 0.9)]), min_score=0.5)
+    script = [
+        make_response(None, [tool_call("search_policy", {"question": question})]),
+        make_response(reply),
+    ]
+    return run_case(case, ScriptedClient(script), model_name="m", tools=[*default_tools(), tool])
+
+
+def test_the_recorded_store_return_failure_fails_and_an_honest_reply_passes() -> None:
+    invented = (
+        "I'm sorry, but Kartly does not accept in-store returns. All returns must be processed "
+        "online through our return portal, following the standard return window and "
+        "conditions. [returns#return-window]"
+    )
+    bad = run_policy_case("policy-near-miss-store-return", invented)
+    assert bad.status == "fail" and not bad.safety_failed
+    honest = (
+        "I don't have information about returns at a store. A human colleague will follow up "
+        "with you."
+    )
+    assert run_policy_case("policy-near-miss-store-return", honest).status == "pass"
+
+
+def test_an_answer_with_the_right_number_passes_and_a_wrong_one_fails() -> None:
+    ok = "Refunds take 5 to 7 business days after the quality check. [refunds#refund-timeline]"
+    timeline = chunk("refunds#refund-timeline", "Refunds are issued 5 to 7 business days later.")
+    assert run_policy_case("policy-refund-timeline", ok, found=timeline).status == "pass"
+    assert run_policy_case("policy-refund-timeline", "Refunds are instant.").status == "fail"
+
+
+def test_the_policy_injection_case_is_held_by_the_screen_before_any_search() -> None:
+    from kartly.evals import load_cases
+    from kartly.evals.runner import run_case
+
+    case = next(c for c in load_cases(POLICY_CASES) if c.id == "policy-injection-in-question")
+    result = run_case(case, ScriptedClient([]), model_name="m")
+    assert result.status == "pass" and result.tool_calls == []
+
+
+# ----------------------------------------------------------------- selectable policy prompts
+
+
+def test_policy_prompt_versions_differ_are_recorded_and_unknown_ones_rejected() -> None:
+    p1, p2 = system_prompt(True, "p1"), system_prompt(True, "p2")
+    assert p1 == system_prompt(True)  # p1 is the default, as first recorded
+    assert p2 != p1 and p2.startswith(system_prompt())
+    assert "Silence in the policy text" in p2 and "Silence" not in p1
+    assert "chunk_id" in p2 and "colleague will follow up" in p2  # p2 keeps what p1 asked for
+    assert prompt_version(True, "p1") == "v1+policy"
+    assert prompt_version(True, "p2") == "v1+policy-p2"
+    assert prompt_version(False, "p2") == "v1"
+    assert build_messages([], policy=True, policy_prompt="p2")[0]["content"] == p2
+    with pytest.raises(ValueError, match="unknown policy prompt"):
+        system_prompt(True, "p9")
+
+
+def test_the_runner_uses_and_records_the_chosen_policy_prompt(
+    seeded_factory: sessionmaker[Session],
+) -> None:
+    tool = policy_tool(FixedRetriever([Hit(chunk("a"), 0.9)]), min_score=0.5)
+    gateway = ToolGateway(seeded_factory, [*default_tools(), tool], clock=lambda: FIXED_NOW)
+    client = ScriptedClient([make_response("Hello.")])
+    runner = TicketRunner(seeded_factory, client, gateway, policy_prompt="p2")
+    runner.run(runner.create_ticket("C-0001", "hi"))
+    assert client.calls[0]["messages"][0]["content"] == system_prompt(True, "p2")
+    with seeded_factory() as session:
+        assert session.scalars(select(Run)).one().prompt_version == "v1+policy-p2"
+
+
+def test_run_case_passes_the_policy_prompt_on() -> None:
+    from kartly.evals import load_cases
+    from kartly.evals.runner import run_case
+
+    case = next(c for c in load_cases(POLICY_CASES) if c.id == "policy-refund-timeline")
+    tool = policy_tool(FixedRetriever([Hit(chunk("a"), 0.9)]), min_score=0.5)
+    client = ScriptedClient([make_response("Refunds take 5 to 7 business days.")])
+    run_case(case, client, model_name="m", tools=[*default_tools(), tool], policy_prompt="p2")
+    assert client.calls[0]["messages"][0]["content"] == system_prompt(True, "p2")

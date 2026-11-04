@@ -29,6 +29,10 @@ from kartly.evals.runner import (
     summarize,
 )
 from kartly.llm import LLMConfigError, ModelRegistry
+from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, POLICY_RULES
+from kartly.retrieval import EmbeddingError, KnowledgeBaseError
+from kartly.retrieval.setup import build_policy_tools
+from kartly.tools import default_tools
 
 DEFAULT_CASES = "evals/golden"
 DEFAULT_OUT = "evals/runs"
@@ -64,6 +68,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="also run the routing classifier with this model (a Tier 3 label escalates; "
         "cases that expect a draft for such tickets will then fail)",
     )
+    parser.add_argument(
+        "--kb",
+        help="also give the model the search_policy tool over this knowledge-base directory "
+        "(for example kb; needs Ollama with the embedding model)",
+    )
+    parser.add_argument(
+        "--policy-prompt",
+        default=DEFAULT_POLICY_PROMPT,
+        choices=sorted(POLICY_RULES),
+        help="which wording of the policy rules to use with --kb (default p1)",
+    )
     parser.add_argument("--no-save", action="store_true", help="print only; write no files")
     parser.add_argument("--note", default="", help="a short label stored in the experiment log")
     parser.add_argument("--show-replies", action="store_true", help="also print passing replies")
@@ -87,12 +102,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("error: --repeat must be at least 1 and --pause cannot be negative", file=sys.stderr)
         return 2
 
+    needs_kb = [c.id for c in cases if any("search_policy" in m.any_of for m in c.expect.calls)]
+    if needs_kb and not args.kb:
+        print(
+            f"error: {len(needs_kb)} case(s) expect the search_policy tool "
+            f"({', '.join(needs_kb[:3])}{', ...' if len(needs_kb) > 3 else ''}); add --kb kb "
+            "(and run Ollama with the embedding model)",
+            file=sys.stderr,
+        )
+        return 2
+
     load_env()
     try:
         registry = ModelRegistry.from_yaml(args.config or get_settings().models_config_path)
         client = registry.client(args.model)
         router = registry.client(args.router) if args.router else None
-    except LLMConfigError as exc:
+        tools = None
+        if args.kb:
+            settings = get_settings()
+            tools = default_tools() + build_policy_tools(
+                args.kb,
+                embed_model=settings.embed_model,
+                ollama_url=settings.ollama_url,
+                min_score=settings.policy_min_score,
+                cache_path=Path(args.out) / "embedding_cache.json",
+            )
+    except (LLMConfigError, KnowledgeBaseError, EmbeddingError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -117,13 +152,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             pause_s=args.pause,
             screen=not args.no_screen,
             router=router,
+            tools=tools,
+            policy_prompt=args.policy_prompt,
             on_result=show,
         )
-    summary = summarize(results, cases, args.model)
+    summary = summarize(
+        results, cases, args.model, policy=bool(args.kb), policy_prompt=args.policy_prompt
+    )
     print()
     print(format_summary(summary))
     if not args.no_save:
-        note = args.note or (f"router={args.router}" if args.router else "")
+        note = args.note or " ".join(
+            part
+            for part in (
+                f"router={args.router}" if args.router else "",
+                f"kb={args.kb}" if args.kb else "",
+            )
+            if part
+        )
         path = save_run(results, summary, Path(args.out), note=note)
         print(f"\nSaved {path} and a row in {Path(args.out) / 'experiments.csv'}")
     return 0 if summary.failed == 0 and summary.errored == 0 else 1

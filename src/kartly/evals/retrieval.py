@@ -29,15 +29,34 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from kartly.retrieval import BM25Retriever, Chunk, KnowledgeBaseError, Retriever, kb_digest, load_kb
+from kartly.retrieval import (
+    BM25Retriever,
+    Chunk,
+    DenseRetriever,
+    Embedder,
+    EmbeddingError,
+    HybridRetriever,
+    KnowledgeBaseError,
+    OllamaEmbedder,
+    Retriever,
+    kb_digest,
+    load_kb,
+)
+from kartly.retrieval.dense import DEFAULT_EMBED_MODEL, DEFAULT_OLLAMA_URL
 
 DEFAULT_QUERIES = Path("evals/retrieval/queries.yaml")
 DEFAULT_KB = "kb"
 DEFAULT_OUT = "evals/runs"
 DEPTH = 10  # how many results are fetched; hit@k and MRR are computed from them
 
-RETRIEVERS: dict[str, Callable[[Sequence[Chunk]], Retriever]] = {
-    "bm25": lambda chunks: BM25Retriever(chunks),
+# Each builder gets the chunks and a function that creates the embedder on first use, so "bm25"
+# never needs Ollama.
+RETRIEVERS: dict[str, Callable[[Sequence[Chunk], Callable[[], Embedder]], Retriever]] = {
+    "bm25": lambda chunks, _embedder: BM25Retriever(chunks),
+    "dense": lambda chunks, embedder: DenseRetriever(chunks, embedder()),
+    "hybrid": lambda chunks, embedder: HybridRetriever(
+        [BM25Retriever(chunks), DenseRetriever(chunks, embedder())]
+    ),
 }
 
 
@@ -144,6 +163,41 @@ def compute_metrics(outcomes: Sequence[Outcome]) -> Metrics:
 
 
 @dataclass(frozen=True)
+class Cutoff:
+    """ "Answer only if the best score is at least ``score``": the choice that best separates
+    answerable from unanswerable questions on this run (ties go to the lower score)."""
+
+    score: float
+    answerable_kept: int
+    answerable_total: int
+    unanswerable_rejected: int
+    unanswerable_total: int
+
+
+def best_cutoff(outcomes: Sequence[Outcome]) -> Cutoff | None:
+    answerable = [o.top_score for o in outcomes if o.case.relevant]
+    unanswerable = [o.top_score for o in outcomes if not o.case.relevant]
+    if not answerable or not unanswerable:
+        return None
+    best: tuple[float, float] | None = None
+    chosen = 0.0
+    for candidate in sorted(set(answerable + unanswerable)):
+        kept = sum(s >= candidate for s in answerable)
+        rejected = sum(s < candidate for s in unanswerable)
+        value = kept / len(answerable) + rejected / len(unanswerable)
+        if best is None or value > best[0]:
+            best = (value, candidate)
+            chosen = candidate
+    return Cutoff(
+        score=chosen,
+        answerable_kept=sum(s >= chosen for s in answerable),
+        answerable_total=len(answerable),
+        unanswerable_rejected=sum(s < chosen for s in unanswerable),
+        unanswerable_total=len(unanswerable),
+    )
+
+
+@dataclass(frozen=True)
 class Report:
     retriever: str
     kb_digest: str
@@ -155,6 +209,8 @@ class Report:
     answerable_top_score: float | None  # mean best score
     unanswerable_top_score: float | None
     unanswerable_max_score: float | None
+    answerable_min_score: float | None
+    cutoff: Cutoff | None
 
     def to_dict(self) -> dict[str, Any]:
         document: dict[str, Any] = json.loads(json.dumps(self, default=lambda o: o.__dict__))
@@ -185,6 +241,8 @@ def build_report(
         answerable_top_score=_mean([o.top_score for o in answerable]),
         unanswerable_top_score=_mean([o.top_score for o in unanswerable]),
         unanswerable_max_score=max((o.top_score for o in unanswerable), default=None),
+        answerable_min_score=min((o.top_score for o in answerable), default=None),
+        cutoff=best_cutoff(outcomes),
     )
 
 
@@ -208,8 +266,16 @@ def format_report(report: Report) -> str:
     lines.append(
         f"  top score: answerable mean {_f(report.answerable_top_score, 2)}, "
         f"unanswerable mean {_f(report.unanswerable_top_score, 2)} "
-        f"(max {_f(report.unanswerable_max_score, 2)})"
+        f"(max {_f(report.unanswerable_max_score, 2)}); lowest answerable "
+        f"{_f(report.answerable_min_score, 2)}"
     )
+    if report.cutoff is not None:
+        c = report.cutoff
+        lines.append(
+            f"  best no-answer cut-off {c.score:.3f}: "
+            f"keeps {c.answerable_kept}/{c.answerable_total} answerable, "
+            f"rejects {c.unanswerable_rejected}/{c.unanswerable_total} unanswerable"
+        )
     lines.append("  not in top 5: " + (", ".join(report.misses) if report.misses else "none"))
     return "\n".join(lines)
 
@@ -281,6 +347,8 @@ def save_run(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m kartly.evals.retrieval", description=__doc__)
     parser.add_argument("--retriever", default="bm25", choices=sorted(RETRIEVERS))
+    parser.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL, help="Ollama embedding model")
+    parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     parser.add_argument("--kb", default=DEFAULT_KB, help="directory of knowledge-base *.md files")
     parser.add_argument("--cases", type=Path, default=DEFAULT_QUERIES)
     parser.add_argument("--show", action="store_true", help="print every question and its results")
@@ -294,16 +362,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (KnowledgeBaseError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    outcomes = run_retrieval_eval(cases, RETRIEVERS[args.retriever](chunks))
+    out_dir = Path(args.out)
+
+    def make_embedder() -> Embedder:
+        return OllamaEmbedder(
+            args.embed_model, args.ollama_url, cache_path=out_dir / "embedding_cache.json"
+        )
+
+    try:
+        retriever = RETRIEVERS[args.retriever](chunks, make_embedder)
+        outcomes = run_retrieval_eval(cases, retriever)
+    except EmbeddingError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if args.show:
         for outcome in outcomes:
             print(format_outcome(outcome))
         print()
-    report = build_report(outcomes, args.retriever, chunks, cases)
+    report = build_report(outcomes, retriever.name, chunks, cases)
     print(format_report(report))
     if not args.no_save:
-        path = save_run(outcomes, report, Path(args.out), note=args.note)
-        print(f"\nSaved {path} and a row in {Path(args.out) / 'retrieval_experiments.csv'}")
+        path = save_run(outcomes, report, out_dir, note=args.note)
+        print(f"\nSaved {path} and a row in {out_dir / 'retrieval_experiments.csv'}")
     return 0
 
 

@@ -15,20 +15,22 @@ from __future__ import annotations
 
 import contextlib
 import uuid
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from kartly.gateway import ToolGateway
 from kartly.guards import ScreenResult, screen_text
+from kartly.guards.grounding import GroundingResult, check_grounding
 from kartly.llm import ChatClient
 from kartly.orchestrator.budget import RunBudget
 from kartly.orchestrator.loop import AgentLoop, LoopResult, StepRecord, StopReason
-from kartly.orchestrator.prompts import PROMPT_VERSION, build_messages
+from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, build_messages, prompt_version
 from kartly.routing import (
     DEFAULT_VERSION,
     ClassifierResult,
@@ -92,6 +94,10 @@ class TicketRunner:
         rules: Callable[[str], RuleVerdict] | None = route_by_rules,
         router: ChatClient | None = None,
         router_version: str = DEFAULT_VERSION,
+        policy_prompt: str = DEFAULT_POLICY_PROMPT,
+        grounding: Callable[[str, Sequence[Mapping[str, Any]], str], GroundingResult] | None = (
+            check_grounding
+        ),
     ) -> None:
         """``screen`` checks customer text for prompt injection before any model call (default
         on); a suspicious ticket goes straight to a human. ``rules`` is the same for Tier 3
@@ -105,7 +111,11 @@ class TicketRunner:
         self._router = router
         self._router_version = router_version
         self._model_tier = model_tier
+        self._policy_prompt = policy_prompt
+        self._grounding = grounding
         self._loop = AgentLoop(client, gateway, budget=budget, allowed_tools=allowed_tools)
+        # The policy rules go into the prompt only when the model can actually call the tool.
+        self._policy = any(spec["function"]["name"] == "search_policy" for spec in self._loop.specs)
 
     # ---------------------------------------------------------------------- tickets
 
@@ -171,7 +181,7 @@ class TicketRunner:
         try:
             result = self._loop.run(
                 ctx,
-                build_messages(thread),
+                build_messages(thread, policy=self._policy, policy_prompt=self._policy_prompt),
                 on_step=lambda step: self._write_step(run_id, step, offset),
             )
         except Exception as exc:
@@ -185,7 +195,12 @@ class TicketRunner:
                 tokens_out=result.tokens_out + pre.tokens_out,
                 cost_usd=result.cost_usd + pre.cost_usd,
             )
-        return self._close_run(run_id, ticket_id, result)
+        check = None
+        if self._grounding is not None and result.answered and result.answer is not None:
+            customer_text = "\n".join(c for role, c in thread if role is MessageRole.CUSTOMER)
+            verdict_g = self._grounding(result.answer, result.messages, customer_text)
+            check = verdict_g if verdict_g.applicable else None
+        return self._close_run(run_id, ticket_id, result, check, idx=len(result.steps) + offset)
 
     # -------------------------------------------------------------------- internals
 
@@ -384,7 +399,7 @@ class TicketRunner:
                 ticket_id=ticket_id,
                 mode=RunMode.SHADOW,
                 model_tier=self._model_tier,
-                prompt_version=PROMPT_VERSION,
+                prompt_version=prompt_version(self._policy, self._policy_prompt),
             )
             ticket.status = TicketStatus.RESOLVING
             session.add(run)
@@ -412,7 +427,27 @@ class TicketRunner:
             )
             session.commit()
 
-    def _close_run(self, run_id: uuid.UUID, ticket_id: uuid.UUID, result: LoopResult) -> RunSummary:
+    def _close_run(
+        self,
+        run_id: uuid.UUID,
+        ticket_id: uuid.UUID,
+        result: LoopResult,
+        check: GroundingResult | None = None,
+        idx: int = 0,
+    ) -> RunSummary:
+        """``check`` is the grounding verdict for a policy reply: a clean one adds a trace step and
+        stores the reply without its citations; a failed one holds the reply for a human."""
+        held = check is not None and not check.ok
+        if held:
+            assert check is not None
+            result = replace(
+                result,
+                stop_reason=StopReason.UNGROUNDED,
+                detail="; ".join(check.problems),
+                answer=None,
+            )
+        elif check is not None and result.answer is not None:
+            result = replace(result, answer=check.text)
         with self._sessions() as session:
             run = session.get(Run, run_id)
             ticket = session.get(Ticket, ticket_id)
@@ -421,6 +456,32 @@ class TicketRunner:
             run.tokens_out = result.tokens_out
             run.shadow_cost_usd = result.cost_usd
             run.finished_at = datetime.now(UTC)
+            if check is not None:
+                session.add(
+                    RunStep(
+                        run_id=run_id,
+                        idx=idx,
+                        kind=StepKind.STAGE,
+                        name="grounding",
+                        input={"citations": list(check.citations)},
+                        output={"held": held, "problems": list(check.problems)},
+                    )
+                )
+            if held:
+                assert check is not None
+                session.add(
+                    AuditLog(
+                        actor_type=ActorType.SYSTEM,
+                        actor_id="grounding",
+                        action="guard.ungrounded_reply",
+                        ticket_id=ticket_id,
+                        run_id=run_id,
+                        details={
+                            "problems": [clean_str(p, 200) for p in check.problems],
+                            "citations": list(check.citations),
+                        },
+                    )
+                )
             if result.answered and result.answer is not None:
                 outcome = "drafted"
                 run.status = RunStatus.SUCCEEDED
@@ -435,7 +496,7 @@ class TicketRunner:
                 )
             else:
                 outcome = "escalated"
-                run.status = RunStatus.FAILED
+                run.status = RunStatus.SUCCEEDED if held else RunStatus.FAILED
                 run.error = clean_str(f"{result.stop_reason}: {result.detail}", MAX_ERROR_CHARS)
                 ticket.status = TicketStatus.ESCALATED
             run.outcome = outcome

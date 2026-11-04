@@ -92,6 +92,11 @@ def _describe_step(step: dict[str, Any]) -> str:
             f"classify: {output.get('intent')}, tier {output.get('tier')}, "
             f"{output.get('sentiment')}, confidence {output.get('confidence')}"
         )
+    if step["kind"] == "stage" and step["name"] == "grounding":
+        cited = ", ".join((step["input"] or {}).get("citations") or []) or "no citation"
+        if output.get("held"):
+            return "grounding: held for a human (" + "; ".join(output.get("problems") or []) + ")"
+        return f"grounding: ok ({cited})"
     if step["kind"] == "stage":
         given = step["input"] or {}
         rules = ", ".join(given.get("rules") or given.get("categories") or [])

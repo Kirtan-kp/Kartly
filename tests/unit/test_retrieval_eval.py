@@ -11,6 +11,7 @@ import pytest
 from kartly.evals.retrieval import (
     Outcome,
     RetrievalCase,
+    best_cutoff,
     build_report,
     compute_metrics,
     format_outcome,
@@ -207,3 +208,45 @@ def test_the_cli_reports_a_bad_knowledge_base_or_question_file(
 def test_chunks_are_hashable_values() -> None:
     c = Chunk("d#x", "d", "T", "X", "text")
     assert {c: 1}[Chunk("d#x", "d", "T", "X", "text")] == 1
+
+
+# ------------------------------------------------------------------ the no-answer cut-off
+
+
+def scored(relevant: list[str], score: float) -> Outcome:
+    return Outcome(case("x", relevant, []), ["a"], [score])
+
+
+def test_cutoff_separates_the_two_groups_when_it_can() -> None:
+    outcomes = [scored(["a"], 9.0), scored(["a"], 6.0), scored([], 3.0), scored([], 2.0)]
+    c = best_cutoff(outcomes)
+    assert c is not None
+    assert c.score == 6.0  # "answer if the best score is at least 6": the lowest perfect choice
+    assert (c.answerable_kept, c.answerable_total) == (2, 2)
+    assert (c.unanswerable_rejected, c.unanswerable_total) == (2, 2)
+
+
+def test_cutoff_reports_the_trade_off_when_the_groups_overlap() -> None:
+    outcomes = [scored(["a"], 9.0), scored(["a"], 4.0), scored([], 5.0), scored([], 1.0)]
+    c = best_cutoff(outcomes)
+    assert c is not None
+    # no cut-off is perfect: 5.0 keeps 1/2 and rejects 2/2; 4.0 keeps 2/2 and rejects 1/2 (a tie,
+    # so the lower one wins), and a mistake in either direction is visible in the counts
+    assert c.score == 4.0
+    assert (c.answerable_kept, c.unanswerable_rejected) == (2, 1)
+
+
+def test_cutoff_needs_both_kinds_of_question() -> None:
+    assert best_cutoff([scored(["a"], 1.0)]) is None
+    assert best_cutoff([scored([], 1.0)]) is None
+    assert best_cutoff([]) is None
+
+
+def test_report_shows_the_lowest_answerable_score_and_the_cutoff() -> None:
+    outcomes = [scored(["a"], 9.0), scored(["a"], 6.0), scored([], 3.0)]
+    cases = [o.case for o in outcomes]
+    text = format_report(build_report(outcomes, "fixed", CHUNKS, cases))
+    assert "lowest answerable 6.00" in text
+    assert "best no-answer cut-off 6.000: keeps 2/2 answerable, rejects 1/1 unanswerable" in text
+    only_answerable = build_report(outcomes[:2], "fixed", CHUNKS, cases[:2])
+    assert only_answerable.cutoff is None and "cut-off" not in format_report(only_answerable)
