@@ -201,14 +201,14 @@ class UnitEmbedder:
 
 
 def test_build_policy_tools_embeds_the_real_kb_and_returns_the_tool() -> None:
-    [tool] = build_policy_tools(
+    tools = build_policy_tools(
         str(ROOT / "kb"),
         embed_model="m",
         ollama_url="http://unused",
         min_score=0.5,
         embedder=UnitEmbedder(),
     )
-    assert tool.name == "search_policy"
+    assert [t.name for t in tools] == ["search_policy", "check_return_eligibility"]
 
 
 def test_an_empty_knowledge_base_is_an_error_not_a_silent_no_op(tmp_path: Path) -> None:
@@ -267,16 +267,26 @@ def test_policy_golden_cases_load_and_every_policy_answer_requires_the_search() 
     from kartly.evals import load_cases
 
     cases = load_cases(POLICY_CASES)
-    assert len({c.id for c in cases}) == len(cases) == 10
+    assert len({c.id for c in cases}) == len(cases) == 14
     answered = [c for c in cases if c.expect.outcome == "drafted"]
-    assert len(answered) == 9
+    assert len(answered) == 13
+    order_cases = {
+        "policy-and-order-together",
+        "policy-order-outside-window",
+        "policy-order-final-sale",
+    }
     for c in answered:
-        assert any("search_policy" in m.any_of for m in c.expect.calls), c.id
+        if c.id in order_cases:  # the eligibility tool decides these; they must look at the order
+            assert any("check_return_eligibility" in m.any_of for m in c.expect.calls), c.id
+        else:
+            assert any("search_policy" in m.any_of for m in c.expect.calls), c.id
     unanswerable = {c.id for c in cases if "unanswerable" in c.tags}
     assert unanswerable == {
         "policy-unanswerable-price-match",
         "policy-near-miss-store-return",
         "policy-near-miss-time-slot",
+        "policy-near-miss-gift-wrap",
+        "policy-near-miss-bulk-discount",
     }
 
 
@@ -369,3 +379,47 @@ def test_run_case_passes_the_policy_prompt_on() -> None:
     client = ScriptedClient([make_response("Refunds take 5 to 7 business days.")])
     run_case(case, client, model_name="m", tools=[*default_tools(), tool], policy_prompt="p2")
     assert client.calls[0]["messages"][0]["content"] == system_prompt(True, "p2")
+
+
+def test_p3_adds_the_order_lookup_rule_to_p2_and_keeps_its_other_rules() -> None:
+    p2, p3 = system_prompt(True, "p2"), system_prompt(True, "p3")
+    assert "look the order up first" in p3 and "look the order up first" not in p2
+    assert "Silence in the policy text" in p3 and p3.endswith(p2.splitlines()[-1])
+    assert prompt_version(True, "p3") == "v1+policy-p3"
+
+
+def run_with_order(case_id: str, order_id: str, reply: str, lookup: bool = True) -> Any:
+    from kartly.evals import load_cases
+    from kartly.evals.runner import run_case
+
+    case = next(c for c in load_cases(POLICY_CASES) if c.id == case_id)
+    window = chunk("returns#return-window", "Most items can be returned within 7 days.")
+    tool = policy_tool(FixedRetriever([Hit(window, 0.9)]), min_score=0.5)
+    script = [make_response(None, [tool_call("search_policy", {"question": "return window"})])]
+    if lookup:
+        script.append(make_response(None, [tool_call("get_order", {"order_id": order_id})]))
+    script.append(make_response(reply))
+    return run_case(case, ScriptedClient(script), model_name="m", tools=[*default_tools(), tool])
+
+
+def test_the_order_specific_cases_need_the_lookup_and_reject_a_wrong_verdict() -> None:
+    good = (
+        "Order KRT-100004 was delivered well outside the 7 days return window, so it can't be "
+        "returned. [returns#return-window]"
+    )
+    assert run_with_order("policy-order-outside-window", "KRT-100004", good).status == "pass"
+    no_lookup = run_with_order("policy-order-outside-window", "KRT-100004", good, lookup=False)
+    assert no_lookup.status == "fail"  # an answer without looking at the order does not count
+    wrong = "Yes, you can still return it within 7 days. [returns#return-window]"
+    assert run_with_order("policy-order-outside-window", "KRT-100004", wrong).status == "fail"
+    sale = "One item in KRT-100005 is final sale, so it cannot be returned."
+    assert run_with_order("policy-order-final-sale", "KRT-100005", sale).status == "pass"
+
+
+def test_p4_swaps_the_lookup_rule_for_the_eligibility_tool() -> None:
+    p2, p4 = system_prompt(True, "p2"), system_prompt(True, "p4")
+    assert "check_return_eligibility" in p4 and "check_return_eligibility" not in p2
+    assert "Never work out eligibility from dates yourself" in p4
+    assert "look the order up first" not in p4  # that was p3's wording
+    assert "Silence in the policy text" in p4 and p4.endswith(p2.splitlines()[-1])
+    assert prompt_version(True, "p4") == "v1+policy-p4"

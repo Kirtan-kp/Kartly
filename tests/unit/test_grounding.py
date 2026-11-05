@@ -256,3 +256,46 @@ def test_the_guard_can_be_switched_off(seeded_factory: sessionmaker[Session]) ->
 )  # fmt: skip
 def test_number_normalisation(raw: str, expected: str) -> None:
     assert _normal(raw) == expected
+
+
+ELIGIBILITY = {
+    "role": "tool",
+    "content": json.dumps(
+        {"ok": True, "data": {"eligible": True, "window_days": 7, "days_since_delivery": 3}}
+    ),
+}
+
+
+def test_a_reply_after_the_eligibility_tool_is_checked_against_its_numbers() -> None:
+    ok = check_grounding("It is within the 7 days window, delivered 3 days ago.", [ELIGIBILITY])
+    assert ok.applicable and ok.ok
+    bad = check_grounding("The window is 30 days.", [ELIGIBILITY])
+    assert bad.applicable and bad.problems == (
+        "states '30 days', which is in no policy text or tool result",
+    )
+
+
+def test_an_eligibility_result_alone_does_not_make_a_citation_valid() -> None:
+    r = check_grounding("Yes. [returns#return-window]", [ELIGIBILITY])
+    assert r.problems == (
+        "cites [returns#return-window], which no policy search returned in this run",
+    )
+
+
+def test_other_order_tool_results_still_leave_the_reply_unchecked() -> None:
+    order = {"role": "tool", "content": json.dumps({"ok": True, "data": {"status": "delivered"}})}
+    assert not check_grounding("Arrives in 5 days.", [order]).applicable
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ok": False, "error": "order_not_found"},
+        {"ok": True, "data": ["x"]},
+        {"ok": True, "data": None},
+    ],
+)
+def test_tool_results_without_a_data_object_are_ignored(payload: dict[str, Any]) -> None:
+    message = {"role": "tool", "content": json.dumps(payload)}
+    r = check_grounding("I could not find that order.", [message])
+    assert not r.applicable and r.ok

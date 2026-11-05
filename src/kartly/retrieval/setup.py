@@ -10,6 +10,7 @@ from kartly.retrieval.dense import DenseRetriever, Embedder, OllamaEmbedder
 from kartly.tools import default_tools
 from kartly.tools.base import Tool
 from kartly.tools.policy import policy_tool
+from kartly.tools.returns import RETURN_TOOLS
 
 
 def build_policy_tools(
@@ -21,7 +22,7 @@ def build_policy_tools(
     cache_path: Path | None = None,
     embedder: Embedder | None = None,
 ) -> tuple[Tool, ...]:
-    """Embed the knowledge base and return the ``search_policy`` tool.
+    """Embed the knowledge base and return ``search_policy`` and ``check_return_eligibility``.
 
     Raises ``KnowledgeBaseError`` for a bad KB and ``EmbeddingError`` if Ollama cannot embed it,
     so a misconfigured server fails at start-up, not on the first customer question.
@@ -30,7 +31,7 @@ def build_policy_tools(
     if not chunks:
         raise KnowledgeBaseError(f"{kb_dir}: no knowledge-base chunks found")
     emb = embedder or OllamaEmbedder(embed_model, ollama_url, cache_path=cache_path)
-    return (policy_tool(DenseRetriever(chunks, emb), min_score=min_score),)
+    return (policy_tool(DenseRetriever(chunks, emb), min_score=min_score), *RETURN_TOOLS)
 
 
 def gateway_tools(settings: Settings, *, cache_dir: Path | None = None) -> tuple[Tool, ...]:

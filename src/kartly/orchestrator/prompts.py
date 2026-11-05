@@ -63,7 +63,36 @@ _P2_RULES = [
     _P1_RULES[2],
 ]
 
-POLICY_RULES: dict[str, str] = {"p1": "\n".join(_P1_RULES), "p2": "\n".join(_P2_RULES)}
+# p3 adds one rule after p2 fixed the invented answers but, in the first run, stopped the model
+# from looking up an order the customer named (ADR-040).
+_P3_RULES = [
+    *_P2_RULES[:-1],
+    "- When the customer names an order and asks whether a policy applies to it (can I still "
+    "return it, is it too late), look the order up first with get_order or get_tracking, then "
+    "apply the policy text to the facts you found. Do not assume dates or contents the "
+    "customer only described.",
+    _P2_RULES[-1],
+]
+
+# p4 replaces p3's "look the order up" with a tool that decides eligibility in code (ADR-041): the
+# model failed to compare a delivery date with the window, or to notice a final-sale item, even
+# with the order in front of it.
+_P4_RULES = [
+    *_P2_RULES[:-1],
+    "- When the customer names an order and asks whether they can still return, exchange or get "
+    "a refund for it, call check_return_eligibility and report its verdict as it is: whether "
+    "the order is eligible, the window and the days since delivery, and any item that cannot be "
+    "returned and why. Never work out eligibility from dates yourself. Use search_policy to "
+    "explain the rule or the steps, not to decide.",
+    _P2_RULES[-1],
+]
+
+POLICY_RULES: dict[str, str] = {
+    "p1": "\n".join(_P1_RULES),
+    "p2": "\n".join(_P2_RULES),
+    "p3": "\n".join(_P3_RULES),
+    "p4": "\n".join(_P4_RULES),
+}
 DEFAULT_POLICY_PROMPT = "p1"
 
 REPAIR_NUDGE = (

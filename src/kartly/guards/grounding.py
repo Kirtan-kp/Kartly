@@ -9,8 +9,8 @@ Two things are checked, both deterministic:
 
 It does NOT judge claims without numbers: "Kartly has no stores" next to a real chunk about
 returns passes. That needs a model-based check; this guard only removes the cheap, certain
-failures. A reply is checked only when it cites something or a search was made, so order answers
-are untouched.
+failures. A reply is checked only when it cites something or a policy tool (search or return
+eligibility) ran, so ordinary order answers are untouched.
 """
 
 from __future__ import annotations
@@ -88,18 +88,22 @@ def check_grounding(
 ) -> GroundingResult:
     """``messages`` is the loop's final history (tool results are the tool-role entries)."""
     retrieved: set[str] = set()
-    searched = False
+    policy_used = False
     evidence_numbers = _numbers(customer_text)
     for content, payload in _tool_payloads(messages):
         evidence_numbers |= _numbers(content)
         data = payload.get("data")
-        if isinstance(data, dict) and "found" in data:  # a search_policy result
-            searched = True
+        if not isinstance(data, dict):
+            continue
+        if "found" in data:  # a search_policy result
+            policy_used = True
             for item in data.get("results") or []:
                 if isinstance(item, dict) and isinstance(item.get("chunk_id"), str):
                     retrieved.add(item["chunk_id"])
+        elif "eligible" in data:  # a check_return_eligibility result: it states policy numbers
+            policy_used = True
     citations = tuple(dict.fromkeys(CITATION.findall(reply)))
-    if not citations and not searched:
+    if not citations and not policy_used:
         return GroundingResult(False, (), reply, ())
     problems = [
         f"cites [{c}], which no policy search returned in this run"
