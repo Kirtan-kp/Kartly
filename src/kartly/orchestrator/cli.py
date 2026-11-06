@@ -61,6 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ToolGateway(factory, gateway_tools(settings)),
                 model_tier=args.model,
                 router=router,
+                context_budget=settings.context_budget_tokens,
             )
             ticket_id = runner.create_ticket(args.customer, args.message)
             print(f"Running {args.model} for customer {args.customer} ...", flush=True)

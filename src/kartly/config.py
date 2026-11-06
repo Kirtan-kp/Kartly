@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     embed_model: str = "nomic-embed-text"
     ollama_url: str = "http://localhost:11434"
     policy_min_score: float = 0.67
+    # Token budget for the first prompt of a run (system prompt + tools + thread), estimated.
+    context_budget_tokens: int = 6000
     max_workers: int = 2  # tickets processed at the same time
     max_pending_runs: int = 20  # running + queued; beyond this the API answers 503
 

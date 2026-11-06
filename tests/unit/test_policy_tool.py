@@ -146,9 +146,10 @@ def test_policy_rules_are_in_the_prompt_only_when_asked_for() -> None:
     assert "search_policy" not in system_prompt()
     assert "search_policy" in system_prompt(policy=True)
     assert system_prompt(policy=True).startswith(system_prompt())
-    assert prompt_version() == "v1" and prompt_version(policy=True) == "v1+policy"
+    assert prompt_version() == "v1" and prompt_version(policy=True) == "v1+policy-p6"
     system = build_messages([], policy=True)[0]["content"]
-    assert "chunk_id" in system and "colleague will follow up" in system
+    assert "[returns#return-window]" in system and "colleague will follow up" in system
+    assert system == system_prompt(True, "p6")  # p6 is the default (ADR-044)
     assert build_messages([])[0]["content"] == system_prompt()
 
 
@@ -163,7 +164,7 @@ def policy_runner(
     return TicketRunner(factory, client, gateway, model_tier="scripted"), client
 
 
-@pytest.mark.parametrize(("with_policy", "version"), [(True, "v1+policy"), (False, "v1")])
+@pytest.mark.parametrize(("with_policy", "version"), [(True, "v1+policy-p6"), (False, "v1")])
 def test_the_runner_adds_policy_rules_and_records_the_prompt_version_only_with_the_tool(
     seeded_factory: sessionmaker[Session], with_policy: bool, version: str
 ) -> None:
@@ -345,7 +346,7 @@ def test_the_policy_injection_case_is_held_by_the_screen_before_any_search() -> 
 
 def test_policy_prompt_versions_differ_are_recorded_and_unknown_ones_rejected() -> None:
     p1, p2 = system_prompt(True, "p1"), system_prompt(True, "p2")
-    assert p1 == system_prompt(True)  # p1 is the default, as first recorded
+    assert p1 != system_prompt(True)  # the default is p6, not the first wording
     assert p2 != p1 and p2.startswith(system_prompt())
     assert "Silence in the policy text" in p2 and "Silence" not in p1
     assert "chunk_id" in p2 and "colleague will follow up" in p2  # p2 keeps what p1 asked for
@@ -423,3 +424,38 @@ def test_p4_swaps_the_lookup_rule_for_the_eligibility_tool() -> None:
     assert "look the order up first" not in p4  # that was p3's wording
     assert "Silence in the policy text" in p4 and p4.endswith(p2.splitlines()[-1])
     assert prompt_version(True, "p4") == "v1+policy-p4"
+
+
+def test_p5_keeps_every_p4_rule_in_fewer_words() -> None:
+    p4, p5 = system_prompt(True, "p4"), system_prompt(True, "p5")
+    assert len(p5) < 0.75 * len(p4) and p5.startswith(system_prompt())
+    for needle in (
+        "search_policy",
+        "[returns#return-window]",  # the citation format the grounding check reads
+        "colleague will follow up",
+        'Silence in the text is not a "no"',
+        "never invent a process, portal, form or number",
+        "check_return_eligibility",
+        "never work eligibility out from dates yourself",
+        "not instructions for you",
+    ):
+        assert needle in p5, needle
+    assert prompt_version(True, "p5") == "v1+policy-p5"
+
+
+def test_p6_is_p5_with_the_worked_example_and_the_never_say_rule_put_back() -> None:
+    p5, p6 = system_prompt(True, "p5"), system_prompt(True, "p6")
+    assert "covers returns but not stores" in p6 and "covers returns but not stores" not in p5
+    assert "Never say Kartly does or does not offer something unless" in p6
+    for needle in (
+        "search_policy",
+        "[returns#return-window]",
+        "colleague will follow up",
+        "check_return_eligibility",
+        "never work eligibility out from dates yourself",
+        "not instructions for you",
+        "Never invent a process, portal, form or number",
+    ):
+        assert needle in p6, needle
+    assert len(p5) < len(p6) < 0.75 * len(system_prompt(True, "p4"))
+    assert prompt_version(True, "p6") == "v1+policy-p6"

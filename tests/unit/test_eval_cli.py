@@ -289,9 +289,9 @@ def test_kb_gives_the_runner_the_policy_tool_and_is_noted(
     tools: list[Tool] = list(seen["tools"])
     assert "search_policy" in [t.name for t in tools] and "get_order" in [t.name for t in tools]
     log = (tmp_path / "runs" / "experiments.csv").read_text(encoding="utf-8")
-    assert "kb=" in log and "v1+policy" in log
+    assert "kb=" in log and "v1+policy-p6" in log
 
-    assert seen["policy_prompt"] == "p1"
+    assert seen["policy_prompt"] == "p6"
     main(
         args(
             config,

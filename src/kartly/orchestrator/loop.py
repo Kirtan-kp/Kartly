@@ -132,9 +132,13 @@ class AgentLoop:
         messages: Sequence[dict[str, Any]],
         *,
         on_step: StepSink | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LoopResult:
-        """Run to completion. Never raises for model or tool trouble; those become stop reasons."""
-        return _Execution(self, ctx, [dict(m) for m in messages], on_step).execute()
+        """Run to completion. Never raises for model or tool trouble; those become stop reasons.
+
+        ``context`` (the prompt's token breakdown) is stored on the first model call's trace step.
+        """
+        return _Execution(self, ctx, [dict(m) for m in messages], on_step, context).execute()
 
 
 def _call_key(call: ToolCall) -> str:
@@ -160,8 +164,10 @@ class _Execution:
         ctx: CallContext,
         messages: list[dict[str, Any]],
         on_step: StepSink | None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         self.loop = loop
+        self.context = context
         self.budget = loop.budget
         self.ctx = ctx
         self.messages = messages
@@ -379,11 +385,7 @@ class _Execution:
                 idx=len(self.steps),
                 kind=StepKind.LLM_CALL,
                 name="chat",
-                input={
-                    "new_messages": self._new_messages(),
-                    "tools": [s["function"]["name"] for s in self.loop.specs],
-                    "max_tokens": max_tokens,
-                },
+                input=self._call_input(max_tokens),
                 output=safe_json(output, TRACE_LIMITS),
                 model=response.model,
                 tokens_in=response.usage.prompt_tokens,
@@ -393,6 +395,17 @@ class _Execution:
             )
         )
 
+    def _call_input(self, max_tokens: int) -> dict[str, Any]:
+        """A model call's recorded input; the first call also carries the prompt breakdown."""
+        recorded: dict[str, Any] = {
+            "new_messages": self._new_messages(),
+            "tools": [s["function"]["name"] for s in self.loop.specs],
+            "max_tokens": max_tokens,
+        }
+        if self.context is not None and self.llm_calls == 1:
+            recorded["context"] = self.context
+        return recorded
+
     def _record_failed_call(self, exc: LLMError, max_tokens: int) -> None:
         self.llm_calls += 1  # a failed request still uses a step, so errors cannot loop forever
         self._add(
@@ -400,11 +413,7 @@ class _Execution:
                 idx=len(self.steps),
                 kind=StepKind.LLM_CALL,
                 name="chat",
-                input={
-                    "new_messages": self._new_messages(),
-                    "tools": [s["function"]["name"] for s in self.loop.specs],
-                    "max_tokens": max_tokens,
-                },
+                input=self._call_input(max_tokens),
                 model=exc.model,
                 error=f"{type(exc).__name__}: {clean_str(str(exc), 300)}",
             )

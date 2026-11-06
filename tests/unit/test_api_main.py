@@ -221,3 +221,18 @@ def test_the_launcher_prints_setup_problems_instead_of_a_traceback(
     monkeypatch.setattr("kartly.api.main.get_settings", lambda: make_settings(api_key=None))
     assert main([]) == 2
     assert "KARTLY_API_KEY" in capsys.readouterr().out
+
+
+def test_the_context_budget_setting_reaches_the_runner(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine, fake_server: FakeOpenAIServer, tmp_path: Path
+) -> None:
+    config = write_models_config(tmp_path, fake_server.base_url)
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(
+            models_config_path=str(config), api_key=KEY, context_budget_tokens=1234
+        ),
+    )
+    with TestClient(create_app_from_env()) as http:
+        runner = http.app.state.kartly.runner  # type: ignore[attr-defined]
+        assert runner._context._budget == 1234

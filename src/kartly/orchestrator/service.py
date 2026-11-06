@@ -24,13 +24,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from kartly.context import ContextBuilder
+from kartly.context.builder import DEFAULT_BUDGET_TOKENS
 from kartly.gateway import ToolGateway
 from kartly.guards import ScreenResult, screen_text
 from kartly.guards.grounding import GroundingResult, check_grounding
 from kartly.llm import ChatClient
 from kartly.orchestrator.budget import RunBudget
 from kartly.orchestrator.loop import AgentLoop, LoopResult, StepRecord, StopReason
-from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, build_messages, prompt_version
+from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, prompt_version
 from kartly.routing import (
     DEFAULT_VERSION,
     ClassifierResult,
@@ -95,6 +97,7 @@ class TicketRunner:
         router: ChatClient | None = None,
         router_version: str = DEFAULT_VERSION,
         policy_prompt: str = DEFAULT_POLICY_PROMPT,
+        context_budget: int = DEFAULT_BUDGET_TOKENS,
         grounding: Callable[[str, Sequence[Mapping[str, Any]], str], GroundingResult] | None = (
             check_grounding
         ),
@@ -112,6 +115,7 @@ class TicketRunner:
         self._router_version = router_version
         self._model_tier = model_tier
         self._policy_prompt = policy_prompt
+        self._context = ContextBuilder(context_budget)
         self._grounding = grounding
         self._loop = AgentLoop(client, gateway, budget=budget, allowed_tools=allowed_tools)
         # The policy rules go into the prompt only when the model can actually call the tool.
@@ -179,10 +183,17 @@ class TicketRunner:
                 )
         ctx = CallContext(ticket_id=ticket_id, run_id=run_id, customer_id=customer_id)
         try:
+            built = self._context.build(
+                thread,
+                tool_specs=self._loop.specs,
+                policy=self._policy,
+                policy_prompt=self._policy_prompt,
+            )
             result = self._loop.run(
                 ctx,
-                build_messages(thread, policy=self._policy, policy_prompt=self._policy_prompt),
+                built.messages,
                 on_step=lambda step: self._write_step(run_id, step, offset),
+                context=built.breakdown.to_dict(),
             )
         except Exception as exc:
             self._close_after_crash(run_id, ticket_id, exc)

@@ -72,6 +72,19 @@ def load_trace(session: Session, run_id: uuid.UUID) -> dict[str, Any] | None:
     }
 
 
+def _context_note(step: dict[str, Any]) -> str:
+    """The first model call's prompt size: estimated by the context builder, then as billed."""
+    ctx = (step["input"] or {}).get("context")
+    if not ctx:
+        return ""
+    trimmed = f", {ctx['omitted_messages']} message(s) left out" if ctx["omitted_messages"] else ""
+    over = ", OVER BUDGET" if ctx["over_budget"] else ""
+    return (
+        f"[prompt ~{ctx['total']} tok est (system {ctx['system']}, tools {ctx['tools']}, "
+        f"thread {ctx['thread']}{trimmed}{over}) / {step['tokens_in']} billed] "
+    )
+
+
 def _describe_step(step: dict[str, Any]) -> str:
     output = step["output"] or {}
     if step["kind"] == "llm_call":
@@ -79,8 +92,12 @@ def _describe_step(step: dict[str, Any]) -> str:
             return f"FAILED {step['error']}"
         calls = output.get("tool_calls") or []
         if calls:
-            return "asks for " + ", ".join(f"{c['name']}({c['arguments']})" for c in calls)
-        return f"replies: {output.get('content')!r}"
+            return (
+                _context_note(step)
+                + "asks for "
+                + ", ".join(f"{c['name']}({c['arguments']})" for c in calls)
+            )
+        return _context_note(step) + f"replies: {output.get('content')!r}"
     if step["kind"] == "tool_call":
         args = (step["input"] or {}).get("arguments")
         status = "ok" if output.get("ok") else f"error {output.get('error_code') or step['error']}"

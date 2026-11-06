@@ -254,6 +254,10 @@ Dense search embeds each chunk and question with an Ollama embedding model (`--e
 
 `evals/retrieval/queries.yaml` has 74 questions, each labelled with the chunk that answers it (plain, paraphrase, messy, Hinglish, multi-chunk, and twelve that the KB cannot answer, some deliberately close to real topics). The report gives hit@1/3/5, recall@5 and MRR overall and per tag, plus the score range of answerable versus unanswerable questions and the cut-off that best separates them ("answer only if the best score is at least X"), which is the basis for a "no answer" threshold. Each run appends a row to `evals/runs/retrieval_experiments.csv`; rows are comparable only when the KB and question digests match. See ADR-035.
 
+## Context builder
+
+`context/builder.py` assembles the first prompt of each run within a token budget (`KARTLY_CONTEXT_BUDGET_TOKENS`, default 6000): the system prompt and tool definitions are fixed and counted, the ticket thread gets the rest. A thread that does not fit keeps its first message and the newest ones and says how many were left out. The first model call's trace line shows the estimate next to the provider's billed tokens, for example `[prompt ~1412 tok est (system 654, tools 700, thread 20) / 1196 billed]`. Policy answers are about 85% fixed prompt and tool definitions, so the default prompt is `p6`, a compact wording that passed all 42 policy runs at about 16% fewer tokens than `p4` (`--policy-prompt` selects older ones; ADR-043, ADR-044).
+
 ## Grounding check
 
 A policy reply is checked before it is stored: every `[section]` it cites must be a chunk the search returned in that run, and every number with a unit (days, hours, rupees, percent) must appear in a tool result or in the customer's own message. A reply that fails is held for a human (run outcome `escalated`, stop reason `ungrounded`, audit row `guard.ungrounded_reply`); one that passes is stored without its citations. It does not check claims that contain no numbers. See ADR-039.
@@ -280,7 +284,7 @@ kartly-agent/
     orchestrator/        # bounded loop, run budget, ticket runner, trace  <- built; stages come later
     routing/             # hard rules, classifier, model selection
     llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
-    context/             # context builder, summarizer, memory
+    context/             # prompts, token budget, thread trimming  <- built; summaries later
     retrieval/           # chunking, BM25, dense, RRF fusion  <- built; reranker next
     gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read tools)
     tools/               # tool implementations over the mock store         <- built (read tools)

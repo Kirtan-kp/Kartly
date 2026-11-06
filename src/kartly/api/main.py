@@ -43,6 +43,7 @@ def create_app_from_env() -> FastAPI:
         ToolGateway(factory, gateway_tools(settings)),
         model_tier=model_name,
         router=router,
+        context_budget=settings.context_budget_tokens,
     )
     state = ApiState(
         session_factory=factory,
