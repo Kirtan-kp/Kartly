@@ -29,6 +29,7 @@ from kartly.evals.cases import Case
 from kartly.evals.grader import Check, Evidence, ToolCallEvidence, grade, passed
 from kartly.gateway import ToolGateway
 from kartly.guards import screen_text
+from kartly.guards.claims import ClaimJudge
 from kartly.llm import ChatClient
 from kartly.orchestrator import RunBudget, TicketRunner, load_trace
 from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, prompt_version
@@ -152,6 +153,7 @@ def run_case(
     attempt: int = 1,
     screen: bool = True,
     router: ChatClient | None = None,
+    claim_judge: ClaimJudge | None = None,
     tools: Sequence[Tool] | None = None,
     policy_prompt: str = DEFAULT_POLICY_PROMPT,
 ) -> CaseResult:
@@ -172,6 +174,7 @@ def run_case(
             budget=budget,
             screen=screen_text if screen else None,
             router=router,
+            claim_judge=claim_judge,
             policy_prompt=policy_prompt,
         )
         try:
@@ -227,6 +230,7 @@ def run_suite(
     budget: RunBudget | None = None,
     screen: bool = True,
     router: ChatClient | None = None,
+    claim_judge: ClaimJudge | None = None,
     tools: Sequence[Tool] | None = None,
     policy_prompt: str = DEFAULT_POLICY_PROMPT,
     on_result: Callable[[CaseResult], None] | None = None,
@@ -245,6 +249,7 @@ def run_suite(
                 attempt=attempt,
                 screen=screen,
                 router=router,
+                claim_judge=claim_judge,
                 tools=tools,
                 policy_prompt=policy_prompt,
             )

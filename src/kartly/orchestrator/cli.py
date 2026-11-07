@@ -21,6 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from kartly.config import get_settings, load_env
 from kartly.gateway import ToolGateway
+from kartly.guards.claims import ClaimJudge
 from kartly.llm import LLMConfigError, ModelRegistry
 from kartly.orchestrator.service import TicketRunner, UnknownCustomerError
 from kartly.orchestrator.trace import format_trace, load_trace
@@ -41,6 +42,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", required=True, help="model name from config/models.yaml")
     parser.add_argument("--customer", default=DEFAULT_CUSTOMER, help="customer id (default C-0001)")
     parser.add_argument("--router", help="a model that labels the ticket first (config name)")
+    parser.add_argument(
+        "--claim-check",
+        help="a model that holds a policy reply if a statement is not in the policy text",
+    )
     parser.add_argument("--config", help="path to models.yaml")
     args = parser.parse_args(argv)
 
@@ -55,12 +60,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             contextlib.ExitStack() as stack,
         ):
             router = stack.enter_context(registry.client(args.router)) if args.router else None
+            judge = (
+                ClaimJudge(stack.enter_context(registry.client(args.claim_check)))
+                if args.claim_check
+                else None
+            )
             runner = TicketRunner(
                 factory,
                 client,
                 ToolGateway(factory, gateway_tools(settings)),
                 model_tier=args.model,
                 router=router,
+                claim_judge=judge,
                 context_budget=settings.context_budget_tokens,
             )
             ticket_id = runner.create_ticket(args.customer, args.message)

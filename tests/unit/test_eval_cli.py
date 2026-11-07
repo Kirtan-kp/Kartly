@@ -332,3 +332,33 @@ def test_cases_that_need_the_policy_tool_refuse_to_run_without_kb(
     assert "--kb kb" in err and "policy-refund-timeline" in err
     assert fake_server.requests == []
     assert main(["--cases", policy, "--list"]) == 0  # listing needs no tool
+
+
+def test_claim_check_gives_the_runner_a_judge_closes_it_and_is_noted(
+    monkeypatch: pytest.MonkeyPatch, fake_server: FakeOpenAIServer, tmp_path: Path
+) -> None:
+    from kartly.llm import OpenAICompatClient
+
+    seen: dict[str, Any] = {}
+    closed: list[str] = []
+    real_close = OpenAICompatClient.close
+
+    def spy(cases: Any, client_for: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return run_suite(cases, client_for, **kwargs)
+
+    def close(self: OpenAICompatClient) -> None:
+        closed.append(self.name)
+        real_close(self)
+
+    monkeypatch.setattr("kartly.evals.cli.run_suite", spy)
+    monkeypatch.setattr(OpenAICompatClient, "close", close)
+    fake_server.responder = good_tracking_model
+    config = write_models_config(tmp_path, fake_server.base_url)
+    main(args(config, tmp_path, "--only", "tracking-in-transit", "--claim-check", "fake_small"))
+    assert seen["claim_judge"] is not None and seen["claim_judge"].name == "fake_small"
+    assert closed.count("fake_small") == 2  # the model and the judge
+    [row] = list(csv.DictReader((tmp_path / "runs" / "experiments.csv").open(encoding="utf-8")))
+    assert row["note"] == "claim-check=fake_small"
+    main(args(config, tmp_path, "--only", "tracking-in-transit", "--no-save"))
+    assert seen["claim_judge"] is None

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # A model from models.yaml that labels each ticket (intent, tier) before the resolver runs,
     # sending Tier 3 to a human. Empty means no model router (the rules still run).
     router_model: str | None = None
+    # A model that reads each policy reply and holds it if a statement is not in the retrieved
+    # text (ADR-045). Empty means no claim check (the citation and number check still runs).
+    claim_check_model: str | None = None
     # Policy search (the search_policy tool). Set kb_dir (for example "kb") to enable it; it needs
     # an Ollama embedding model (ollama pull nomic-embed-text). min_score is a dense cosine
     # cut-off: below it the tool reports "no policy found" (ADR-037).

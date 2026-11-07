@@ -28,6 +28,7 @@ from kartly.evals.runner import (
     save_run,
     summarize,
 )
+from kartly.guards.claims import ClaimJudge
 from kartly.llm import LLMConfigError, ModelRegistry
 from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, POLICY_RULES
 from kartly.retrieval import EmbeddingError, KnowledgeBaseError
@@ -67,6 +68,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--router",
         help="also run the routing classifier with this model (a Tier 3 label escalates; "
         "cases that expect a draft for such tickets will then fail)",
+    )
+    parser.add_argument(
+        "--claim-check",
+        help="also run the claim judge with this model (it holds a policy reply that says "
+        "something the retrieved text does not)",
     )
     parser.add_argument(
         "--kb",
@@ -117,6 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         registry = ModelRegistry.from_yaml(args.config or get_settings().models_config_path)
         client = registry.client(args.model)
         router = registry.client(args.router) if args.router else None
+        judge_client = registry.client(args.claim_check) if args.claim_check else None
         tools = None
         if args.kb:
             settings = get_settings()
@@ -144,6 +151,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     with client, contextlib.ExitStack() as stack:
         if router is not None:
             stack.enter_context(router)
+        if judge_client is not None:
+            stack.enter_context(judge_client)
         results = run_suite(
             cases,
             lambda _case: client,
@@ -152,6 +161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             pause_s=args.pause,
             screen=not args.no_screen,
             router=router,
+            claim_judge=ClaimJudge(judge_client) if judge_client is not None else None,
             tools=tools,
             policy_prompt=args.policy_prompt,
             on_result=show,
@@ -166,6 +176,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             part
             for part in (
                 f"router={args.router}" if args.router else "",
+                f"claim-check={args.claim_check}" if args.claim_check else "",
                 f"kb={args.kb}" if args.kb else "",
             )
             if part

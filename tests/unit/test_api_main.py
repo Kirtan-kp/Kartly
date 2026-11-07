@@ -236,3 +236,32 @@ def test_the_context_budget_setting_reaches_the_runner(
     with TestClient(create_app_from_env()) as http:
         runner = http.app.state.kartly.runner  # type: ignore[attr-defined]
         assert runner._context._budget == 1234
+
+
+def test_a_claim_check_model_from_the_settings_reaches_the_runner_and_is_closed_at_shutdown(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine, fake_server: FakeOpenAIServer, tmp_path: Path
+) -> None:
+    config = write_models_config(tmp_path, fake_server.base_url)
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(
+            models_config_path=str(config), api_key=KEY, claim_check_model="fake_small"
+        ),
+    )
+    closed: list[str] = []
+    real_close = OpenAICompatClient.close
+
+    def close_client(self: OpenAICompatClient) -> None:
+        closed.append(self.name)
+        real_close(self)
+
+    monkeypatch.setattr(OpenAICompatClient, "close", close_client)
+    with TestClient(create_app_from_env()) as http:
+        judge = http.app.state.kartly.runner._claim_judge  # type: ignore[attr-defined]
+        assert judge is not None and judge.name == "fake_small"
+    assert closed.count("fake_small") == 2
+
+
+def test_no_claim_check_unless_configured(wired: Engine, fake_server: FakeOpenAIServer) -> None:
+    with TestClient(create_app_from_env()) as http:
+        assert http.app.state.kartly.runner._claim_judge is None  # type: ignore[attr-defined]

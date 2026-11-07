@@ -1,0 +1,227 @@
+# Claim-judge eval: a reply, the policy chunks it was written from, and whether every statement in
+# it is supported. Replies were written by hand to imitate the mistakes seen in real runs (the
+# invented "we do not accept store returns", an overclaim, a contradiction) and the safe patterns
+# that must NOT be held (a paraphrase, a hand-over, a greeting). `label: unsupported` means at
+# least one statement is not in the evidence. `extra_evidence` is text added after the chunks, such
+# as a return-eligibility tool result.
+#
+# Tags: invented (a rule or offer the text never states), contradiction (the text says the
+# opposite), overclaim (stronger than the text), mixed (true parts plus one invented part),
+# paraphrase, handover, combined (needs two chunks), tool (relies on a tool result), polite.
+
+# ------------------------------------------------------------------------------ unsupported
+- id: u01-store-return
+  question: Can I return something at a Kartly store?
+  chunks: [returns#how-to-start-a-return]
+  reply: "I'm sorry, but Kartly does not accept returns in physical stores. All returns must be processed online through your account."
+  label: unsupported
+  tags: [invented]
+- id: u02-invoice-requirement
+  question: What do I need to return an item?
+  chunks: [returns#return-window, returns#how-to-start-a-return]
+  reply: "You can return most items within 7 days of delivery. You will also need to include a printed copy of the invoice in the parcel."
+  label: unsupported
+  tags: [mixed]
+- id: u03-sunday-everywhere
+  question: Do you deliver on Sundays?
+  chunks: [shipping#delivery-days]
+  reply: "Yes, we deliver on Sundays to every serviceable pincode, as well as Monday to Saturday."
+  label: unsupported
+  tags: [contradiction]
+- id: u04-address-after-shipping
+  question: My order has shipped. Can I still change the address?
+  chunks: [address#when-the-address-can-be-changed]
+  reply: "Yes, you can still change it after shipping by asking the courier to update the address, and we will pass your request on."
+  label: unsupported
+  tags: [contradiction]
+- id: u05-price-match
+  question: Do you match prices from other sites?
+  chunks: [refunds#partial-refunds]
+  reply: "Yes, we match the price of any competitor if you send us a link within 7 days of your purchase."
+  label: unsupported
+  tags: [invented]
+- id: u06-auto-refund-limit
+  question: Will my INR 3,000 refund be automatic?
+  chunks: [refunds#refund-approval-limits]
+  reply: "Yes, refunds up to INR 5,000 are processed automatically once eligibility is confirmed."
+  label: unsupported
+  tags: [contradiction]
+- id: u07-wallet-convert
+  question: Can I turn my wallet credit back into cash?
+  chunks: [refunds#wallet-credit]
+  reply: "Yes, wallet credit can be converted back to money whenever you ask, and it is added to your bank account within 3 days."
+  label: unsupported
+  tags: [contradiction]
+- id: u08-delivery-flat
+  question: How much is delivery?
+  chunks: [shipping#delivery-charges]
+  reply: "Delivery costs INR 49 on every order, whatever the order value."
+  label: unsupported
+  tags: [contradiction]
+- id: u09-international
+  question: Can you ship to Nepal?
+  chunks: [shipping#delivery-locations]
+  reply: "Yes, we ship to Nepal and a few other nearby countries, with delivery in 10 to 14 days."
+  label: unsupported
+  tags: [contradiction]
+- id: u10-gold-free-pickup
+  question: Do Gold members get anything for returns?
+  chunks: [account_support#gold-membership]
+  reply: "Gold members get a 10-day return window and free return pickup on every order."
+  label: unsupported
+  tags: [mixed]
+- id: u11-support-247
+  question: Is support available at night?
+  chunks: [account_support#support-hours]
+  reply: "Yes, our support chat is available 24 hours a day, every day of the week."
+  label: unsupported
+  tags: [contradiction]
+- id: u12-cancel-after-ship
+  question: My parcel shipped yesterday, can I cancel it in the app?
+  chunks: [cancellation#cancelling-after-shipping]
+  reply: "Yes, you can cancel it in the app any time before it is delivered and the refund will follow."
+  label: unsupported
+  tags: [contradiction]
+- id: u13-restocking-fee
+  question: Is there a fee for returning an item I just did not like?
+  chunks: [returns#return-shipping-fee]
+  reply: "A pickup fee of INR 60 is deducted from your refund, and a 10% restocking fee also applies."
+  label: unsupported
+  tags: [mixed]
+- id: u14-exchange-unlimited
+  question: Can I exchange my shirt for another size?
+  chunks: [returns#exchanges]
+  reply: "Yes, you can exchange it for a different size, and you can exchange as many times as you like at no charge."
+  label: unsupported
+  tags: [overclaim]
+- id: u15-refund-24h
+  question: How fast will my refund arrive?
+  chunks: [refunds#refund-timeline]
+  reply: "We guarantee your refund will arrive in your account within 24 hours of the return being picked up."
+  label: unsupported
+  tags: [contradiction]
+- id: u16-cheque
+  question: What are the payment options for large orders?
+  chunks: [payments#payment-methods, payments#cash-on-delivery-limit]
+  reply: "You can pay by UPI, cards, net banking or the Kartly wallet. Cash on delivery is available up to INR 5,000, and we also accept cheques on delivery."
+  label: unsupported
+  tags: [mixed]
+- id: u17-nothing-found-invented
+  question: Do you have a loyalty points programme?
+  chunks: []
+  reply: "Yes, you earn 1 point for every INR 100 you spend, and 100 points give you INR 50 off."
+  label: unsupported
+  tags: [invented]
+- id: u18-eligibility-overrule
+  question: Can I still return order KRT-100002?
+  chunks: [returns#return-window]
+  extra_evidence: 'Return eligibility result: {"order_id":"KRT-100002","window_days":7,"days_since_delivery":12,"window_ends_on":"2026-10-27","eligible":false,"reason":"outside_window"}'
+  reply: "Your order is eligible for a return. As a courtesy we can still accept it, so go ahead and book the pickup."
+  label: unsupported
+  tags: [tool, contradiction]
+
+# -------------------------------------------------------------------------------- supported
+- id: s01-window
+  question: How long do I have to return something?
+  chunks: [returns#return-window]
+  reply: "Most items can be returned within 7 days of delivery, and Gold members get 10 days. The item must be unused and in its original packaging."
+  label: supported
+  tags: [paraphrase]
+- id: s02-refund-timeline
+  question: How long does a refund take?
+  chunks: [refunds#refund-timeline]
+  reply: "Refunds are issued 5 to 7 business days after the returned item reaches our warehouse and passes the quality check."
+  label: supported
+  tags: [paraphrase]
+- id: s03-cod
+  question: Can I pay cash on delivery for a INR 6,000 order?
+  chunks: [payments#cash-on-delivery-limit]
+  reply: "Cash on delivery is only available for orders up to INR 5,000, so an order of INR 6,000 would need to be paid online before dispatch."
+  label: supported
+  tags: [combined]
+- id: s04-delivery-charge
+  question: Is delivery free?
+  chunks: [shipping#delivery-charges]
+  reply: "Delivery is free on orders of INR 499 or more. Below that, a delivery charge of INR 49 applies."
+  label: supported
+  tags: [paraphrase]
+- id: s05-handover-store
+  question: Can I return something at a Kartly store?
+  chunks: [returns#how-to-start-a-return]
+  reply: "I don't have information about returning items at a store. A human colleague will follow up with you. What I can tell you is that you can start a return by sharing the order number and the item in the app or by writing to support."
+  label: supported
+  tags: [handover]
+- id: s06-handover-only
+  question: Do you have a loyalty points programme?
+  chunks: []
+  reply: "I'm sorry, I don't have that information, and a human colleague will follow up with you."
+  label: supported
+  tags: [handover]
+- id: s07-wallet
+  question: Can I get wallet credit instead of a refund?
+  chunks: [refunds#wallet-credit]
+  reply: "Yes, you can choose Kartly wallet credit instead of a refund to your bank. It is added instantly and can be used on any order, but it cannot be converted back to money."
+  label: supported
+  tags: [paraphrase]
+- id: s08-cancel-before
+  question: Can I cancel my order?
+  chunks: [cancellation#cancelling-before-shipping, cancellation#cancelling-after-shipping]
+  reply: "An order can be cancelled free of charge until it ships. Once it has shipped it cannot be cancelled, but you can refuse the delivery or return it after it arrives."
+  label: supported
+  tags: [combined]
+- id: s09-damaged
+  question: My item arrived broken.
+  chunks: [damaged#reporting-a-problem, damaged#what-we-do]
+  reply: "I'm sorry to hear that. Please report it within 48 hours of delivery with clear photos of the item and the packaging. For a verified problem you can choose a replacement or a full refund, and pickup is free."
+  label: supported
+  tags: [polite, combined]
+- id: s10-eligibility-no
+  question: Can I still return order KRT-100002?
+  chunks: [returns#return-window]
+  extra_evidence: 'Return eligibility result: {"order_id":"KRT-100002","window_days":7,"days_since_delivery":12,"window_ends_on":"2026-10-27","eligible":false,"reason":"outside_window"}'
+  reply: "I'm sorry, but order KRT-100002 is outside the 7-day return window. It was delivered 12 days ago and the window ended on 27 October 2026."
+  label: supported
+  tags: [tool]
+- id: s11-gold
+  question: How long is the return window for Gold members?
+  chunks: [account_support#gold-membership]
+  reply: "Gold members get a 10-day return window, along with priority support and free delivery on every order."
+  label: supported
+  tags: [paraphrase]
+- id: s12-refund-limit
+  question: Will my INR 3,000 refund be automatic?
+  chunks: [refunds#refund-approval-limits]
+  reply: "Refunds above INR 1,000 are reviewed by a human colleague, usually within 1 business day, before money is sent, so a INR 3,000 refund would be reviewed first."
+  label: supported
+  tags: [combined]
+- id: s13-sale
+  question: Can I return an item I bought on sale?
+  chunks: [returns#items-bought-on-sale, returns#items-that-cannot-be-returned]
+  reply: "Yes, sale items can be returned on the same terms as any other item, unless they are marked \"Final sale\", which cannot be returned or exchanged."
+  label: supported
+  tags: [combined]
+- id: s14-delivery-times
+  question: How long will delivery take to Pune?
+  chunks: [shipping#delivery-times, shipping#delivery-days]
+  reply: "Orders to the 25 metro cities, which include Pune, usually arrive in 2 to 4 days. The estimated date is shown on the order page once the order ships."
+  label: supported
+  tags: [combined]
+- id: s15-sunday
+  question: Do you deliver on Sundays in Mumbai?
+  chunks: [shipping#delivery-days]
+  reply: "Sunday delivery is available only in the 25 metro cities, and Mumbai is one of them. Elsewhere we deliver Monday to Saturday."
+  label: supported
+  tags: [paraphrase]
+- id: s16-polite-offer
+  question: Hi, how do I change my email address?
+  chunks: [account_support#changing-your-email-or-phone]
+  reply: "Hello! Your email and phone number are changed in your account settings after a one-time verification code. We cannot change them through a support chat. Is there anything else I can help you with?"
+  label: supported
+  tags: [polite]
+- id: s17-eligibility-yes
+  question: Can I still return order KRT-100001?
+  chunks: [returns#return-window]
+  extra_evidence: 'Return eligibility result: {"order_id":"KRT-100001","window_days":7,"days_since_delivery":3,"window_ends_on":"2026-11-10","eligible":true,"reason":null}'
+  reply: "Yes, order KRT-100001 can be returned. It was delivered 3 days ago and your 7-day window ends on 10 November 2026."
+  label: supported
+  tags: [tool]

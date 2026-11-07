@@ -332,6 +332,59 @@ def test_an_answer_with_the_right_number_passes_and_a_wrong_one_fails() -> None:
     assert run_policy_case("policy-refund-timeline", "Refunds are instant.").status == "fail"
 
 
+def test_run_case_gives_the_claim_judge_to_the_runner() -> None:
+    import json
+
+    from kartly.evals import load_cases
+    from kartly.evals.runner import run_case
+    from kartly.guards.claims import ClaimJudge
+
+    case = next(c for c in load_cases(POLICY_CASES) if c.id == "policy-refund-timeline")
+    timeline = chunk("refunds#refund-timeline", "Refunds are issued 5 to 7 business days later.")
+    tool = policy_tool(FixedRetriever([Hit(timeline, 0.9)]), min_score=0.5)
+    reply = "Refunds take 5 to 7 business days. [refunds#refund-timeline]"
+
+    def run(verdict: dict[str, list[str]] | None) -> Any:
+        script = [
+            make_response(None, [tool_call("search_policy", {"question": "refund time"})]),
+            make_response(reply),
+        ]
+        judge = (
+            ClaimJudge(ScriptedClient([make_response(json.dumps(verdict))])) if verdict else None
+        )
+        return run_case(
+            case,
+            ScriptedClient(script),
+            model_name="m",
+            tools=[*default_tools(), tool],
+            claim_judge=judge,
+        )
+
+    assert run(None).status == "pass"
+    assert run({"unsupported": []}).status == "pass"
+    flagged = run({"unsupported": ["refunds are instant"]})
+    assert flagged.status == "fail"  # the judge held the reply, so no draft reached the grader
+
+
+def test_run_suite_hands_the_claim_judge_to_every_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kartly.evals import load_cases
+    from kartly.evals.runner import run_suite
+    from kartly.guards.claims import ClaimJudge
+
+    seen: list[Any] = []
+
+    def spy(case: Any, client: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs["claim_judge"])
+        raise StopIteration
+
+    monkeypatch.setattr("kartly.evals.runner.run_case", spy)
+    judge = ClaimJudge(ScriptedClient([]))
+    cases = load_cases(POLICY_CASES)[:1]
+    with pytest.raises(StopIteration):
+        run_suite(cases, lambda _c: ScriptedClient([]), model_name="m", claim_judge=judge)
+    assert seen == [judge]
+
+
 def test_the_policy_injection_case_is_held_by_the_screen_before_any_search() -> None:
     from kartly.evals import load_cases
     from kartly.evals.runner import run_case

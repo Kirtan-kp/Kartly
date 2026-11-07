@@ -15,6 +15,7 @@ from kartly.api.app import ApiState, create_app
 from kartly.api.executor import BoundedExecutor
 from kartly.config import get_settings, load_env
 from kartly.gateway import ToolGateway
+from kartly.guards.claims import ClaimJudge
 from kartly.llm import LLMConfigError, ModelRegistry
 from kartly.orchestrator import TicketRunner
 from kartly.retrieval import EmbeddingError, KnowledgeBaseError
@@ -35,6 +36,9 @@ def create_app_from_env() -> FastAPI:
     model_name = settings.default_model or registry.chain("small")[0]
     client = registry.client(model_name)
     router = registry.client(settings.router_model) if settings.router_model else None
+    judge_client = (
+        registry.client(settings.claim_check_model) if settings.claim_check_model else None
+    )
     engine = make_engine()
     factory = make_session_factory(engine)
     runner = TicketRunner(
@@ -43,6 +47,7 @@ def create_app_from_env() -> FastAPI:
         ToolGateway(factory, gateway_tools(settings)),
         model_tier=model_name,
         router=router,
+        claim_judge=ClaimJudge(judge_client) if judge_client is not None else None,
         context_budget=settings.context_budget_tokens,
     )
     state = ApiState(
@@ -56,6 +61,8 @@ def create_app_from_env() -> FastAPI:
         client.close()
         if router is not None:
             router.close()
+        if judge_client is not None:
+            judge_client.close()
         engine.dispose()
 
     return create_app(state, on_shutdown=cleanup)

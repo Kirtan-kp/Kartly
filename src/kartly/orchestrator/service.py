@@ -28,6 +28,7 @@ from kartly.context import ContextBuilder
 from kartly.context.builder import DEFAULT_BUDGET_TOKENS
 from kartly.gateway import ToolGateway
 from kartly.guards import ScreenResult, screen_text
+from kartly.guards.claims import ClaimJudge, ClaimVerdict, judge_reply, problems_for
 from kartly.guards.grounding import GroundingResult, check_grounding
 from kartly.llm import ChatClient
 from kartly.orchestrator.budget import RunBudget
@@ -101,13 +102,16 @@ class TicketRunner:
         grounding: Callable[[str, Sequence[Mapping[str, Any]], str], GroundingResult] | None = (
             check_grounding
         ),
+        claim_judge: ClaimJudge | None = None,
     ) -> None:
         """``screen`` checks customer text for prompt injection before any model call (default
         on); a suspicious ticket goes straight to a human. ``rules`` is the same for Tier 3
         topics (legal threats, fraud, safety...). ``None`` turns either off. ``router`` is a
         model that labels the ticket (intent, tier) after the rules; a Tier 3 label sends it to a
         human. Off by default. If the router fails the ticket carries on to the resolver (it is
-        recorded in the trace)."""
+        recorded in the trace). ``claim_judge`` is a model that reads a policy reply that passed
+        the grounding check and holds it if a statement is not in the policy text (off by
+        default; a judge that fails also holds the reply)."""
         self._sessions = session_factory
         self._screen = screen
         self._rules = rules
@@ -117,6 +121,7 @@ class TicketRunner:
         self._policy_prompt = policy_prompt
         self._context = ContextBuilder(context_budget)
         self._grounding = grounding
+        self._claim_judge = claim_judge
         self._loop = AgentLoop(client, gateway, budget=budget, allowed_tools=allowed_tools)
         # The policy rules go into the prompt only when the model can actually call the tool.
         self._policy = any(spec["function"]["name"] == "search_policy" for spec in self._loop.specs)
@@ -207,11 +212,24 @@ class TicketRunner:
                 cost_usd=result.cost_usd + pre.cost_usd,
             )
         check = None
+        claims: ClaimVerdict | None = None
         if self._grounding is not None and result.answered and result.answer is not None:
             customer_text = "\n".join(c for role, c in thread if role is MessageRole.CUSTOMER)
             verdict_g = self._grounding(result.answer, result.messages, customer_text)
             check = verdict_g if verdict_g.applicable else None
-        return self._close_run(run_id, ticket_id, result, check, idx=len(result.steps) + offset)
+            if check is not None and check.ok and self._claim_judge is not None:
+                claims = judge_reply(self._claim_judge, customer_text, result.messages, check.text)
+                result = replace(
+                    result,
+                    llm_calls=result.llm_calls + 1,
+                    tokens_in=result.tokens_in + claims.tokens_in,
+                    tokens_out=result.tokens_out + claims.tokens_out,
+                    cost_usd=result.cost_usd + claims.cost_usd,
+                )
+                check = replace(check, problems=problems_for(claims))
+        return self._close_run(
+            run_id, ticket_id, result, check, idx=len(result.steps) + offset, claims=claims
+        )
 
     # -------------------------------------------------------------------- internals
 
@@ -445,6 +463,7 @@ class TicketRunner:
         result: LoopResult,
         check: GroundingResult | None = None,
         idx: int = 0,
+        claims: ClaimVerdict | None = None,
     ) -> RunSummary:
         """``check`` is the grounding verdict for a policy reply: a clean one adds a trace step and
         stores the reply without its citations; a failed one holds the reply for a human."""
@@ -475,7 +494,18 @@ class TicketRunner:
                         kind=StepKind.STAGE,
                         name="grounding",
                         input={"citations": list(check.citations)},
-                        output={"held": held, "problems": list(check.problems)},
+                        output={
+                            "held": held,
+                            "problems": list(check.problems),
+                            **(
+                                {
+                                    "claim_check": self._claim_judge.name,
+                                    "claims_error": claims.error,
+                                }
+                                if claims is not None and self._claim_judge is not None
+                                else {}
+                            ),
+                        },
                     )
                 )
             if held:

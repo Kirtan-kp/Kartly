@@ -262,6 +262,12 @@ Dense search embeds each chunk and question with an Ollama embedding model (`--e
 
 A policy reply is checked before it is stored: every `[section]` it cites must be a chunk the search returned in that run, and every number with a unit (days, hours, rupees, percent) must appear in a tool result or in the customer's own message. A reply that fails is held for a human (run outcome `escalated`, stop reason `ungrounded`, audit row `guard.ungrounded_reply`); one that passes is stored without its citations. It does not check claims that contain no numbers. See ADR-039.
 
+## Claim check
+
+The grounding check cannot see a wrong claim that has no number: "Kartly does not accept returns in physical stores" next to a real chunk about returns passes it. The claim check is a second model call that reads the retrieved text and the reply and lists any statement the text does not support (`guards/claims.py`, judge prompt `j1`). It is off by default. Turn it on with `KARTLY_CLAIM_CHECK_MODEL=NAME`, `--claim-check NAME` on the orchestrator CLI, or `--claim-check NAME` on `python -m kartly.evals`. It runs only on a policy reply that already passed the grounding check, it can only hold a reply (never rewrite one), and a judge that fails or returns something unusable also holds the reply. Its cost is added to the run (about 700 tokens per policy answer).
+
+Measure the judge before trusting it: `python -m kartly.evals.claims --model groq_small --show` scores it on `evals/claims/cases.yaml` (35 replies, 18 with an invented, contradicted or overclaimed statement and 17 that are fine, including hand-overs and replies that rely on a return-eligibility result). It reports how many bad replies it caught, how many good ones it held, judge errors, tokens and latency, and appends a row to `evals/runs/claims_experiments.csv`. See ADR-045.
+
 ## Planned stack
 
 Python, FastAPI, Postgres + pgvector, Redis (RQ or ARQ), Docker, GitHub Actions, OpenTelemetry, Ollama (local models), hosted free-tier LLM APIs behind one adapter.
@@ -288,7 +294,7 @@ kartly-agent/
     retrieval/           # chunking, BM25, dense, RRF fusion  <- built; reranker next
     gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read tools)
     tools/               # tool implementations over the mock store         <- built (read tools)
-    guards/              # injection screen, grounding check  <- built; PII redaction later
+    guards/              # injection screen, grounding check, claim judge  <- built; PII redaction later
     store/               # DB models, migrations, seed data        <- built
     approvals/           # approval queue and decisions
     observability/       # tracing, metrics, replay
@@ -297,6 +303,7 @@ kartly-agent/
   data/
   evals/
     golden/              # tickets plus expected outcomes
+    claims/              # labelled replies for the claim judge
     graders/             # state-based graders, LLM judge
     runs/                # experiment log, recorded LLM responses
     redteam/             # adversarial cases

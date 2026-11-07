@@ -165,3 +165,20 @@ def test_a_router_can_be_named_and_its_label_call_is_in_the_trace(
     out = capsys.readouterr().out
     assert "classify: FAILED" in out  # the fake model does not answer in labels; it carried on
     assert fake_server.requests[0]["body"]["response_format"] == {"type": "json_object"}
+
+
+def test_a_claim_check_model_can_be_named(
+    monkeypatch: pytest.MonkeyPatch, db: Engine, fake_server: FakeOpenAIServer, tmp_path: Path
+) -> None:
+    from kartly.orchestrator import TicketRunner
+
+    seen: dict[str, Any] = {}
+    real = TicketRunner
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("kartly.orchestrator.cli.TicketRunner", spy)
+    main([*config(tmp_path, fake_server), "--claim-check", "fake_small"])
+    assert seen["claim_judge"] is not None and seen["claim_judge"].name == "fake_small"
