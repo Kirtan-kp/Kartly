@@ -3,7 +3,7 @@
 **Status:** Planning complete, ready for implementation (Week 1)
 **Author:** (you)
 **Last updated:** 2026-10-23
-**Companion docs:** `DECISIONS.md` (ADR log), `README.md` (repo layout, Week 1 checklist)
+**Companion docs:** `DECISIONS.md` (ADR log), `README.md` (repo layout, progress by week)
 
 ---
 

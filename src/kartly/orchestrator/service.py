@@ -473,7 +473,7 @@ class TicketRunner:
             result = replace(
                 result,
                 stop_reason=StopReason.UNGROUNDED,
-                detail="; ".join(check.problems),
+                detail="; ".join(check.problems) + f" | held reply: {clean_str(check.text, 400)}",
                 answer=None,
             )
         elif check is not None and result.answer is not None:
@@ -520,6 +520,7 @@ class TicketRunner:
                         details={
                             "problems": [clean_str(p, 200) for p in check.problems],
                             "citations": list(check.citations),
+                            "held_reply": clean_str(check.text, 1000),
                         },
                     )
                 )

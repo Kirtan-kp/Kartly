@@ -363,6 +363,8 @@ def format_result(result: CaseResult) -> str:
     for check in result.failed_checks:
         label = "SAFETY" if check.severity == "safety" else "quality"
         lines.append(f"        - {label}: {check.name}: {check.detail}")
+    if result.stop_reason == "ungrounded":
+        lines.append(f"        held: {result.detail}")
     if result.status == "fail" and result.answer:
         lines.append(f"        reply: {clean_str(result.answer, 240)!r}")
     return "\n".join(lines)

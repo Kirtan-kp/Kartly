@@ -264,9 +264,9 @@ A policy reply is checked before it is stored: every `[section]` it cites must b
 
 ## Claim check
 
-The grounding check cannot see a wrong claim that has no number: "Kartly does not accept returns in physical stores" next to a real chunk about returns passes it. The claim check is a second model call that reads the retrieved text and the reply and lists any statement the text does not support (`guards/claims.py`, judge prompt `j1`). It is off by default. Turn it on with `KARTLY_CLAIM_CHECK_MODEL=NAME`, `--claim-check NAME` on the orchestrator CLI, or `--claim-check NAME` on `python -m kartly.evals`. It runs only on a policy reply that already passed the grounding check, it can only hold a reply (never rewrite one), and a judge that fails or returns something unusable also holds the reply. Its cost is added to the run (about 700 tokens per policy answer).
+The grounding check cannot see a wrong claim that has no number: "Kartly does not accept returns in physical stores" next to a real chunk about returns passes it. The claim check is a second model call that reads the retrieved text and the reply and lists any statement the text does not support (`guards/claims.py`, judge prompt `j2`). It is off by default. Turn it on with `KARTLY_CLAIM_CHECK_MODEL=NAME`, `--claim-check NAME` on the orchestrator CLI, or `--claim-check NAME` on `python -m kartly.evals`. It runs only on a policy reply that already passed the grounding check, it can only hold a reply (never rewrite one), and a judge that fails or returns something unusable also holds the reply. Its cost is added to the run (about 550 to 700 tokens per policy answer). The judge also sees what the order tools returned, so a reply can state facts about the customer's own order, and a flagged statement that only says "I don't have that information" or "a colleague will follow up" is dropped in code, because a small model flags those despite being told not to. Use a hosted model for the judge: `local_small` held 16 of 17 good replies.
 
-Measure the judge before trusting it: `python -m kartly.evals.claims --model groq_small --show` scores it on `evals/claims/cases.yaml` (35 replies, 18 with an invented, contradicted or overclaimed statement and 17 that are fine, including hand-overs and replies that rely on a return-eligibility result). It reports how many bad replies it caught, how many good ones it held, judge errors, tokens and latency, and appends a row to `evals/runs/claims_experiments.csv`. See ADR-045.
+Measure the judge before trusting it: `python -m kartly.evals.claims --model groq_small --show` scores it on `evals/claims/cases.yaml` (39 replies, 20 with an invented, contradicted or overclaimed statement and 19 that are fine, including hand-overs and replies that rely on a return-eligibility result or the customer's order data). It reports how many bad replies it caught, how many good ones it held, judge errors, tokens and latency, and appends a row to `evals/runs/claims_experiments.csv`. See ADR-045.
 
 ## Planned stack
 
@@ -315,21 +315,47 @@ kartly-agent/
   .github/workflows/     # lint, types, tests (smoke eval, build, deploy added later)
 ```
 
-## Week 1 checklist
+## Progress by week
 
-Goal: one ticket works end to end with a stored trace.
+The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the base; the later weeks are summarised and updated as each slice lands. Decisions and measurements live in DECISIONS.md.
 
-- [x] Create repo, `pyproject.toml`, ruff and mypy config, pre-commit config
+**Week 1: one ticket end to end with a stored trace.** Done, except the model benchmark.
+
+- [x] Repo, `pyproject.toml`, ruff and mypy config, pre-commit config
 - [x] `docker-compose.yml` with Postgres (+pgvector) and Redis
-- [x] Schema and Alembic migrations for the mock store (`customers`, `orders`, `order_items`, `shipments`) and support tables (`tickets`, `messages`, `runs`, `run_steps`, `actions`, `audit_log`), with an append-only audit log enforced by database triggers
-- [x] Seed script for ~50 synthetic customers and ~200 orders in varied states, plus 8 fixture orders
+- [x] Schema and Alembic migrations for the mock store and support tables, with an append-only audit log enforced by database triggers
+- [x] Seed script for ~50 synthetic customers and ~200 orders, plus 8 fixture orders
 - [x] Tool Gateway with `get_order` and `get_tracking`, server-side `customer_id` injection, savepoint-per-call, and a fail-closed audit log
-- [x] LLM adapter (OpenAI-compatible) with config-driven models; Ollama as first backend, Groq second
+- [x] LLM adapter (OpenAI-compatible) with config-driven models; Ollama first, Groq second
 - [x] Token counting and shadow-cost calculation from `config/models.yaml`
-- [x] Minimal tool-calling loop with step and token caps
+- [x] Tool-calling loop with step and token caps
 - [x] `POST /v1/tickets` and `GET /v1/runs/{id}/trace` (FastAPI)
-- [x] First 10 hand-written eval cases and a tiny state-based grader
-- [ ] Benchmark 2-3 local models that fit 4 GB VRAM for tool-call validity (record results in `evals/runs/`)
+- [x] First hand-written eval cases and a state-based grader
+- [ ] Benchmark 2-3 local models that fit 4 GB VRAM for tool-call validity. Only `local_small` has been measured so far (routing, policy and the claim judge); it is not usable for policy answers or as the judge.
+
+**Week 2: evals, routing and safety screens.** Done.
+
+- [x] Golden set with a runner, graders, experiment log and `--repeat` variance (14 routing/resolver cases)
+- [x] Injection screen, Tier 3 rules (legal, injury, distress) and the optional classifier router, with their own evals
+
+**Week 3: knowledge base, retrieval and grounding.** Mostly done.
+
+- [x] Synthetic KB (44 chunks), BM25, dense and hybrid retrieval with a retrieval eval (74 questions)
+- [x] `search_policy` with a "nothing found" cut-off, `check_return_eligibility` (verdict computed in code), selectable policy prompts (default `p6`)
+- [x] Context builder with a token budget and a per-call breakdown in the trace
+- [x] Grounding check (citations and numbers) and an optional model-based claim judge, each with an eval
+- [ ] Reranker (deferred: dense retrieval already ranks the right chunk first on 93.5% of questions)
+- [ ] Golden set grown to about 60 cases (28 so far, 14 of them policy)
+
+**Week 4: write tools, approvals, idempotency.** Next. Tier 1-2 tools (refund, cancel), approval queue, idempotency keys, audit, shadow/auto switch.
+
+**Week 5: reliability.** Queue workers, retries, fallback chain across models, dead-letter queue, kill switch, replay. Prompt caching or a paid tier for Groq's tokens-per-minute limit.
+
+**Week 6: observability.** Tracing, metrics, admin UI, shadow pricing, routing experiments.
+
+**Week 7: delivery.** CI/CD, Docker image, deployment.
+
+**Week 8: polish.** README, demo, write-up.
 
 ## Ship gates
 

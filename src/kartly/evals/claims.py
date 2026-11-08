@@ -56,6 +56,7 @@ class ClaimCase(BaseModel):
     reply: str
     label: Literal["supported", "unsupported"]
     extra_evidence: str = ""
+    order_data: str = ""  # what the order tools returned, as the judge sees it
     tags: list[str] = []
 
 
@@ -122,7 +123,9 @@ def run_cases(
     total = len(cases) * repeat
     for attempt in range(1, repeat + 1):
         for case in cases:
-            verdict = judge.judge(case.question, evidence_for(case, chunks), case.reply)
+            verdict = judge.judge(
+                case.question, evidence_for(case, chunks), case.reply, case.order_data
+            )
             result = ClaimResult(case, verdict, attempt)
             results.append(result)
             if on_result is not None:

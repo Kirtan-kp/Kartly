@@ -225,3 +225,48 @@
   reply: "Yes, order KRT-100001 can be returned. It was delivered 3 days ago and your 7-day window ends on 10 November 2026."
   label: supported
   tags: [tool]
+
+# ---------------------------------------------------- added after the first run (judge j1)
+# j1 flagged plain hand-overs and had no order data, so replies that state order facts could not
+# be checked. These cases cover both; the first run's cases are unchanged.
+- id: s18-handover-price-match
+  question: Do you match prices from other sites?
+  chunks: [refunds#partial-refunds]
+  reply: "I'm sorry, I don't have any information about price matching. A human colleague will follow up with you."
+  label: supported
+  tags: [handover]
+- id: s19-handover-time-slot
+  question: Can I choose a delivery time slot?
+  chunks: [shipping#delivery-days]
+  reply: "I can't confirm whether time slots are available because I don't have that information. A colleague will follow up with you shortly."
+  label: supported
+  tags: [handover]
+- id: s20-order-facts
+  question: Can I still return order KRT-100002?
+  chunks: [returns#return-window]
+  extra_evidence: 'Return eligibility result: {"order_id":"KRT-100002","window_days":7,"days_since_delivery":12,"window_ends_on":"2026-10-27","eligible":false,"reason":"outside_window"}'
+  order_data: '{"order_id":"KRT-100002","status":"delivered","delivered_on":"2026-10-21","items":[{"name":"Cotton Kurta","qty":1,"final_sale":false}]}'
+  reply: "Your Cotton Kurta from order KRT-100002 was delivered on 21 October 2026. The 7-day return window ended on 27 October, so it can no longer be returned."
+  label: supported
+  tags: [tool]
+- id: s21-order-final-sale
+  question: Can I return the shoes from order KRT-100003?
+  chunks: [returns#items-that-cannot-be-returned]
+  extra_evidence: 'Return eligibility result: {"order_id":"KRT-100003","eligible":false,"reason":"all_items_final_sale"}'
+  order_data: '{"order_id":"KRT-100003","status":"delivered","items":[{"name":"Running Shoes","qty":1,"final_sale":true}]}'
+  reply: "The Running Shoes in order KRT-100003 were bought as final sale, and final sale items cannot be returned."
+  label: supported
+  tags: [tool]
+- id: u19-handover-plus-invention
+  question: Can I return something at a Kartly store?
+  chunks: [returns#how-to-start-a-return]
+  reply: "I don't have details on store returns, but a colleague will follow up. Meanwhile, note that store returns always carry a INR 100 handling fee."
+  label: unsupported
+  tags: [mixed, handover]
+- id: u20-order-fact-invented
+  question: Where is my order KRT-100002?
+  chunks: []
+  order_data: '{"order_id":"KRT-100002","status":"delivered","delivered_on":"2026-10-21"}'
+  reply: "Your order KRT-100002 was delivered on 21 October 2026 and left with your neighbour, who signed for it."
+  label: unsupported
+  tags: [tool, invented]
