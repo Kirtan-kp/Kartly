@@ -72,6 +72,8 @@ class ToolError(Exception):
 
 
 ToolHandler = Callable[[ToolEnv, Any], dict[str, Any]]
+# A rule that says why a human must approve this particular call, or None if none is needed.
+ApprovalRule = Callable[[ToolEnv, Any], str | None]
 
 _TOOL_NAME = re.compile(r"[a-z][a-z0-9_]{0,59}")
 
@@ -83,8 +85,21 @@ class Tool:
     description: str
     args_model: type[BaseModel]
     handler: ToolHandler
+    # Writes only. ``preview`` runs every check the handler runs, changes nothing, and returns a
+    # short description of what would happen. It is what a shadow-mode proposal and an approval
+    # request show. ``needs_approval`` can require a human even in auto mode (money over a limit).
+    preview: ToolHandler | None = None
+    needs_approval: ApprovalRule | None = None
+
+    @property
+    def is_write(self) -> bool:
+        return self.tier >= RiskTier.LOW_RISK_WRITE
 
     def __post_init__(self) -> None:
+        if self.is_write and self.preview is None:
+            raise ValueError(f"{self.name}: a write tool needs a preview")
+        if not self.is_write and (self.preview is not None or self.needs_approval is not None):
+            raise ValueError(f"{self.name}: only write tools take a preview or approval rule")
         if not _TOOL_NAME.fullmatch(self.name):
             raise ValueError(f"invalid tool name: {self.name!r}")
         if self.args_model.model_config.get("extra") != "forbid":

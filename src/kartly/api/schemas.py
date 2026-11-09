@@ -42,7 +42,7 @@ class TicketCreated(BaseModel):
     status: str
     duplicate: bool = False
     run_id: uuid.UUID | None = None
-    outcome: str | None = None  # drafted | escalated, once the run has finished
+    outcome: str | None = None  # drafted | awaiting_approval | escalated, once the run has finished
     stop_reason: str | None = None
     answer: str | None = None  # the draft reply (shadow mode: a human sends it)
 

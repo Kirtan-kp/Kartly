@@ -133,6 +133,13 @@ class ActionStatus(enum.StrEnum):
     AWAITING_APPROVAL = "awaiting_approval"
 
 
+class ApprovalStatus(enum.StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
 class ActorType(enum.StrEnum):
     AGENT = "agent"
     HUMAN = "human"
@@ -371,6 +378,39 @@ class Action(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class Approval(Base):
+    """A request for a human to approve one proposed action.
+
+    ``payload_hash`` fingerprints the exact action (tool, arguments, customer) at the moment it
+    was proposed. The action is executed only if its stored arguments still hash to the same
+    value, so what a human approved is what runs. A request that is not decided before
+    ``expires_at`` can no longer be approved.
+    """
+
+    __tablename__ = "approvals"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    action_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("actions.id", ondelete="CASCADE"), unique=True
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), index=True
+    )
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(String(60))  # why a human is needed: shadow_mode, ...
+    status: Mapped[ApprovalStatus] = mapped_column(
+        _enum(ApprovalStatus, "approval_status"),
+        default=ApprovalStatus.PENDING,
+        server_default=ApprovalStatus.PENDING.value,
+        index=True,
+    )
+    requested_at: Mapped[datetime] = _created_at()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(64))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(String(300))
 
 
 class AuditLog(Base):

@@ -80,3 +80,57 @@ def test_failed_tools_roll_back_and_the_transaction_survives(
     assert {"C-BOOM", "C-DUP1", "C-DUP2"}.isdisjoint(ids)
     assert "C-WROTE" in ids
     assert actions == ["tool.failed", "tool.failed", "tool.succeeded"]
+
+
+# ------------------------------------------------------------------------------ write path
+
+
+def _write_gateway(pg_factory: sessionmaker[Session], mode: str) -> ToolGateway:
+    from kartly.gateway import Mode
+    from kartly.tools import WRITE_TOOLS, RiskTier, default_tools
+
+    modes = {RiskTier.LOW_RISK_WRITE: Mode(mode), RiskTier.MONEY: Mode(mode)}
+    return ToolGateway(
+        pg_factory, (*default_tools(), *WRITE_TOOLS), clock=lambda: FIXED_NOW, modes=modes
+    )
+
+
+def test_a_proposal_is_approved_and_runs_once_on_postgres(
+    pg_factory: sessionmaker[Session],
+) -> None:
+    import uuid
+
+    from kartly.store.models import Action, ActionStatus, Approval, ApprovalStatus, Order
+    from tests.support import real_ctx
+
+    gw = _write_gateway(pg_factory, "shadow")
+    proposal = gw.call(real_ctx(pg_factory), "cancel_order", {"order_id": "KRT-100003"})
+    assert proposal.data is not None and proposal.data["status"] == "awaiting_approval"
+    decision = gw.decide(uuid.UUID(proposal.data["approval_id"]), approve=True, actor="agent:maya")
+    assert decision.ok and decision.status == "executed"
+    with pg_factory() as session:
+        order = session.get(Order, "KRT-100003")
+        assert order is not None and order.status.value == "cancelled"
+        assert session.scalars(select(Action)).one().status == ActionStatus.SUCCEEDED
+        approval = session.scalars(select(Approval)).one()
+        assert approval.status == ApprovalStatus.APPROVED and approval.decided_at is not None
+
+
+def test_identical_calls_at_the_same_moment_cancel_the_order_once(
+    pg_factory: sessionmaker[Session],
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from kartly.store.models import Action
+    from tests.support import real_ctx
+
+    gw = _write_gateway(pg_factory, "auto")
+    ctx = real_ctx(pg_factory)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(lambda _i: gw.call(ctx, "cancel_order", {"order_id": "KRT-100003"}), range(8))
+        )
+    assert all(r.ok or r.error_code == "action_in_progress" for r in results)
+    assert sum(1 for r in results if r.ok and r.data and not r.data.get("replayed")) == 1
+    with pg_factory() as session:
+        assert len(session.scalars(select(Action)).all()) == 1

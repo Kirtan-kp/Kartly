@@ -63,7 +63,11 @@ def test_a_ticket_runs_through_the_real_stack(
     # the request the model got carries the real tool schema and the system prompt
     first = fake_server.requests[0]["body"]
     assert first["messages"][0]["role"] == "system"
-    assert [t["function"]["name"] for t in first["tools"]] == ["get_order", "get_tracking"]
+    assert [t["function"]["name"] for t in first["tools"]] == [
+        "get_order",
+        "get_tracking",
+        "cancel_order",
+    ]
     assert "customer_id" not in str(first["tools"])
 
 

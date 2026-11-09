@@ -34,6 +34,20 @@ def make_ctx(customer_id: str) -> CallContext:
     return CallContext(ticket_id=uuid.uuid4(), run_id=uuid.uuid4(), customer_id=customer_id)
 
 
+def real_ctx(factory: sessionmaker[Session], customer: str = "C-0002") -> CallContext:
+    """A call context backed by a real ticket and run, as the gateway's write path needs."""
+    from kartly.store.models import Run, RunMode, Ticket
+
+    with factory() as session:
+        ticket = Ticket(customer_id=customer)
+        session.add(ticket)
+        session.flush()
+        run = Run(ticket_id=ticket.id, mode=RunMode.SHADOW)
+        session.add(run)
+        session.commit()
+        return CallContext(ticket_id=ticket.id, run_id=run.id, customer_id=customer)
+
+
 def alembic_config(conn: Connection) -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "src/kartly/store/migrations"))
@@ -76,7 +90,9 @@ def _violate_unique_constraint(env: ToolEnv, _args: Any) -> dict[str, Any]:
 def _tool(name: str, handler: Any) -> Tool:
     return Tool(
         name=name,
-        tier=RiskTier.LOW_RISK_WRITE,
+        # These doubles write and then misbehave to test the gateway's rollback and audit. They
+        # use the plain path (tier 0); the write path has its own tests with real ticket rows.
+        tier=RiskTier.READ_ONLY,
         description="test tool",
         args_model=NoArgs,
         handler=handler,

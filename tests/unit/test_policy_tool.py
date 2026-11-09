@@ -17,7 +17,7 @@ from kartly.orchestrator.prompts import build_messages, prompt_version, system_p
 from kartly.retrieval import Chunk, EmbeddingError, Hit, KnowledgeBaseError
 from kartly.retrieval.setup import build_policy_tools, gateway_tools
 from kartly.store.models import AuditLog, Run
-from kartly.tools import RiskTier, default_tools
+from kartly.tools import WRITE_TOOLS, RiskTier, default_tools
 from kartly.tools.policy import MAX_TEXT_CHARS, NOT_FOUND_MESSAGE, policy_tool
 from tests.llm_support import ScriptedClient, make_response, tool_call
 from tests.support import FIXED_NOW, make_ctx
@@ -225,7 +225,9 @@ def test_gateway_tools_adds_policy_search_only_when_a_kb_is_configured(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     plain = Settings(kb_dir=None)
-    assert [t.name for t in gateway_tools(plain)] == [t.name for t in default_tools()]
+    assert [t.name for t in gateway_tools(plain)] == [
+        t.name for t in (*default_tools(), *WRITE_TOOLS)
+    ]
     unreachable = Settings(kb_dir=str(ROOT / "kb"), ollama_url="http://127.0.0.1:1")
     with pytest.raises(EmbeddingError):  # fails at start-up, not on the first customer question
         gateway_tools(unreachable, cache_dir=tmp_path)

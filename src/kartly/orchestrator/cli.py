@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from sqlalchemy.exc import SQLAlchemyError
 
 from kartly.config import get_settings, load_env
-from kartly.gateway import ToolGateway
+from kartly.gateway import ToolGateway, modes_from_settings
 from kartly.guards.claims import ClaimJudge
 from kartly.llm import LLMConfigError, ModelRegistry
 from kartly.orchestrator.service import TicketRunner, UnknownCustomerError
@@ -68,7 +68,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             runner = TicketRunner(
                 factory,
                 client,
-                ToolGateway(factory, gateway_tools(settings)),
+                ToolGateway(
+                    factory,
+                    gateway_tools(settings),
+                    modes=modes_from_settings(settings.tier1_mode, settings.tier2_mode),
+                ),
                 model_tier=args.model,
                 router=router,
                 claim_judge=judge,

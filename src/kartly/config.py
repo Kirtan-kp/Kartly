@@ -1,6 +1,7 @@
 """Application settings, read from environment variables (prefix KARTLY_) and .env."""
 
 from functools import lru_cache
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +24,11 @@ class Settings(BaseSettings):
     # A model that reads each policy reply and holds it if a statement is not in the retrieved
     # text (ADR-045). Empty means no claim check (the citation and number check still runs).
     claim_check_model: str | None = None
+    # How much each write tier may do: off (the model never sees the tool), shadow (a call is
+    # checked and becomes a proposal a human must approve) or auto (it runs now). Shadow by
+    # default, so nothing changes in the store until someone chooses otherwise (ADR-046).
+    tier1_mode: Literal["off", "shadow", "auto"] = "shadow"
+    tier2_mode: Literal["off", "shadow", "auto"] = "shadow"
     # Policy search (the search_policy tool). Set kb_dir (for example "kb") to enable it; it needs
     # an Ollama embedding model (ollama pull nomic-embed-text). min_score is a dense cosine
     # cut-off: below it the tool reports "no policy found" (ADR-037).

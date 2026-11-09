@@ -44,6 +44,8 @@ from kartly.routing import (
 )
 from kartly.sanitize import clean_str
 from kartly.store.models import (
+    Action,
+    ActionStatus,
     ActorType,
     AuditLog,
     Customer,
@@ -72,7 +74,7 @@ class UnknownCustomerError(LookupError):
 class RunSummary:
     run_id: uuid.UUID
     ticket_id: uuid.UUID
-    outcome: str  # drafted | escalated
+    outcome: str  # drafted | awaiting_approval | escalated
     stop_reason: StopReason
     detail: str
     answer: str | None
@@ -525,9 +527,18 @@ class TicketRunner:
                     )
                 )
             if result.answered and result.answer is not None:
-                outcome = "drafted"
+                waiting = (
+                    session.scalars(
+                        select(Action.id).where(
+                            Action.run_id == run_id,
+                            Action.status == ActionStatus.AWAITING_APPROVAL,
+                        )
+                    ).first()
+                    is not None
+                )
+                outcome = "awaiting_approval" if waiting else "drafted"
                 run.status = RunStatus.SUCCEEDED
-                ticket.status = TicketStatus.DRAFTED
+                ticket.status = TicketStatus.AWAITING_APPROVAL if waiting else TicketStatus.DRAFTED
                 session.add(
                     Message(
                         ticket_id=ticket_id,

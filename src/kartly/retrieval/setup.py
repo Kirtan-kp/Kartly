@@ -7,7 +7,7 @@ from pathlib import Path
 from kartly.config import Settings
 from kartly.retrieval.chunking import KnowledgeBaseError, load_kb
 from kartly.retrieval.dense import DenseRetriever, Embedder, OllamaEmbedder
-from kartly.tools import default_tools
+from kartly.tools import WRITE_TOOLS, default_tools
 from kartly.tools.base import Tool
 from kartly.tools.policy import policy_tool
 from kartly.tools.returns import RETURN_TOOLS
@@ -35,8 +35,11 @@ def build_policy_tools(
 
 
 def gateway_tools(settings: Settings, *, cache_dir: Path | None = None) -> tuple[Tool, ...]:
-    """The default tools, plus ``search_policy`` when ``KARTLY_KB_DIR`` is set."""
-    tools = default_tools()
+    """The read tools and the write tools, plus ``search_policy`` when ``KARTLY_KB_DIR`` is set.
+
+    A write tool is only offered to the model while its tier is not ``off`` (the gateway decides).
+    """
+    tools = default_tools() + WRITE_TOOLS
     if not settings.kb_dir:
         return tools
     cache = (cache_dir or Path("evals/runs")) / "embedding_cache.json"

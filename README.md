@@ -262,6 +262,22 @@ Dense search embeds each chunk and question with an Ollama embedding model (`--e
 
 A policy reply is checked before it is stored: every `[section]` it cites must be a chunk the search returned in that run, and every number with a unit (days, hours, rupees, percent) must appear in a tool result or in the customer's own message. A reply that fails is held for a human (run outcome `escalated`, stop reason `ungrounded`, audit row `guard.ungrounded_reply`); one that passes is stored without its citations. It does not check claims that contain no numbers. See ADR-039.
 
+## Write tools, modes and approvals
+
+Tools that change the store (risk tier 1 and above) take a longer path through the gateway. Each tier has a mode, set with `KARTLY_TIER1_MODE` and `KARTLY_TIER2_MODE`:
+
+| Mode | What a write call does |
+|---|---|
+| `off` | The model is not shown the tool and cannot call it. |
+| `shadow` (default) | The call is checked (`preview`), then recorded as an action *awaiting approval* with an approval request. Nothing in the store changes. The model is told it is not done yet. |
+| `auto` | The call runs now, unless the tool says this call needs a human (a large refund will). |
+
+A tier 3 tool (never autonomous) is a proposal in every mode. Every write call gets an idempotency key made by the server from the run, the tool and the validated arguments, so a repeated call returns the first call's result and cannot run twice. The model cannot supply a key or a customer id.
+
+An approval request holds a hash of the exact action (tool, arguments, customer). `ToolGateway.decide(approval_id, approve=..., actor=...)` runs the action only if the stored action still hashes to the same value, the request has not expired (24 hours), and the tool's own checks still pass, because the order may have changed while it waited. Every decision, including a refused one, is audited with the human's id.
+
+`cancel_order` (tier 1) cancels a whole order that is placed or confirmed. A packed order cannot be cancelled, as `kb/cancellation.md` says. A run that proposed an action ends as `awaiting_approval` and the ticket as `awaiting_approval`. The approvals API and the refund tool come next; see ADR-046.
+
 ## Claim check
 
 The grounding check cannot see a wrong claim that has no number: "Kartly does not accept returns in physical stores" next to a real chunk about returns passes it. The claim check is a second model call that reads the retrieved text and the reply and lists any statement the text does not support (`guards/claims.py`, judge prompt `j2`). It is off by default. Turn it on with `KARTLY_CLAIM_CHECK_MODEL=NAME`, `--claim-check NAME` on the orchestrator CLI, or `--claim-check NAME` on `python -m kartly.evals`. It runs only on a policy reply that already passed the grounding check, it can only hold a reply (never rewrite one), and a judge that fails or returns something unusable also holds the reply. Its cost is added to the run (about 550 to 700 tokens per policy answer). The judge also sees what the order tools returned, so a reply can state facts about the customer's own order, and a flagged statement that only says "I don't have that information" or "a colleague will follow up" is dropped in code, because a small model flags those despite being told not to. Use a hosted model for the judge: `local_small` held 16 of 17 good replies.
@@ -292,8 +308,8 @@ kartly-agent/
     llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
     context/             # prompts, token budget, thread trimming  <- built; summaries later
     retrieval/           # chunking, BM25, dense, RRF fusion  <- built; reranker next
-    gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read tools)
-    tools/               # tool implementations over the mock store         <- built (read tools)
+    gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read and write paths)
+    tools/               # tool implementations over the mock store         <- built (read and write paths)
     guards/              # injection screen, grounding check, claim judge  <- built; PII redaction later
     store/               # DB models, migrations, seed data        <- built
     approvals/           # approval queue and decisions
@@ -347,7 +363,12 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [ ] Reranker (deferred: dense retrieval already ranks the right chunk first on 93.5% of questions)
 - [ ] Golden set grown to about 60 cases (28 so far, 14 of them policy)
 
-**Week 4: write tools, approvals, idempotency.** Next. Tier 1-2 tools (refund, cancel), approval queue, idempotency keys, audit, shadow/auto switch.
+**Week 4: write tools, approvals, idempotency.** In progress.
+
+- [x] 4a: gateway write path (off/shadow/auto, idempotency keys, proposals, approvals bound to a payload hash, expiry), `approvals` table, `cancel_order`
+- [ ] 4b: `issue_refund` (INR 1,000 auto limit, per-customer daily cap, human approval above it)
+- [ ] 4c: approvals API (list, approve, reject) and the ticket state after a decision
+- [ ] 4d: write evals (shadow and auto graded on store state) and a red-team set for approval bypass
 
 **Week 5: reliability.** Queue workers, retries, fallback chain across models, dead-letter queue, kill switch, replay. Prompt caching or a paid tier for Groq's tokens-per-minute limit.
 
