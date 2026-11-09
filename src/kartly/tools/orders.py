@@ -61,19 +61,28 @@ def iso(value: datetime | None) -> str | None:
     return None if value is None else utc(value).isoformat()
 
 
-def _load_owned_order(env: ToolEnv, order_id: str, *options: ExecutableOption) -> Order:
+def _load_owned_order(
+    env: ToolEnv, order_id: str, *options: ExecutableOption, lock: bool = False
+) -> Order:
     """Load an order only if it belongs to the caller.
+
+    ``lock=True`` is for a write that changes the order: it takes a row lock (Postgres; SQLite
+    ignores it) and reloads the row, so two concurrent writes cannot both act on the same old
+    values (a lost update on ``refunded_paise``).
 
     The ownership test is part of the query, so another customer's order is never loaded on the
     normal path. A foreign order and a nonexistent order produce the same error and message, so
     the model (and anyone steering it) cannot tell which order IDs exist. Only the audit log
     records the difference.
     """
-    order = env.session.scalars(
+    query = (
         select(Order)
         .where(Order.id == order_id, Order.customer_id == env.ctx.customer_id)
         .options(*options)
-    ).first()
+    )
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    order = env.session.scalars(query).first()
     if order is not None:
         return order
     exists = env.session.scalar(select(Order.id).where(Order.id == order_id)) is not None

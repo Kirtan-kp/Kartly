@@ -67,6 +67,7 @@ def test_a_ticket_runs_through_the_real_stack(
         "get_order",
         "get_tracking",
         "cancel_order",
+        "issue_refund",
     ]
     assert "customer_id" not in str(first["tools"])
 

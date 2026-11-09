@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -45,3 +46,17 @@ def seeded_factory(engine: Engine) -> sessionmaker[Session]:
 @pytest.fixture
 def gateway(seeded_factory: sessionmaker[Session]) -> ToolGateway:
     return ToolGateway(seeded_factory, clock=lambda: FIXED_NOW)
+
+
+@pytest.fixture(autouse=True)
+def _ignore_the_developers_kartly_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KARTLY_* variables from the shell, and the developer's own .env file (default model, claim
+    check, knowledge-base directory, tier modes, refund limits), must never change what a test
+    sees. A test that wants a setting passes it explicitly."""
+    from kartly.config import Settings, get_settings
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    get_settings.cache_clear()
+    for name in [n for n in os.environ if n.startswith("KARTLY_")]:
+        if name != "KARTLY_TEST_DATABASE_URL":
+            monkeypatch.delenv(name, raising=False)

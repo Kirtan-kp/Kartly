@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # default, so nothing changes in the store until someone chooses otherwise (ADR-046).
     tier1_mode: Literal["off", "shadow", "auto"] = "shadow"
     tier2_mode: Literal["off", "shadow", "auto"] = "shadow"
+    # Money limits for issue_refund (ADR-047): a refund that takes an order's total refunded above
+    # the auto limit, or a customer's refunds over 24 hours above the daily cap, needs a human.
+    refund_auto_limit_inr: int = 1000
+    refund_daily_cap_inr: int = 5000
     # Policy search (the search_policy tool). Set kb_dir (for example "kb") to enable it; it needs
     # an Ollama embedding model (ollama pull nomic-embed-text). min_score is a dense cosine
     # cut-off: below it the tool reports "no policy found" (ADR-037).

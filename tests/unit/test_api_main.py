@@ -3,6 +3,7 @@ real HTTP model server, driven through the API."""
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,16 +30,9 @@ def make_settings(**values: object) -> Settings:
 
 @pytest.fixture(autouse=True)
 def _no_kartly_settings_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A developer's own KARTLY_DEFAULT_MODEL (set in .env or the shell) must not leak in."""
-    for name in (
-        "KARTLY_API_KEY",
-        "KARTLY_DEFAULT_MODEL",
-        "KARTLY_ROUTER_MODEL",
-        "KARTLY_MAX_WORKERS",
-        "KARTLY_MAX_PENDING_RUNS",
-        "KARTLY_MODELS_CONFIG_PATH",
-        "KARTLY_DATABASE_URL",
-    ):
+    """A developer's own KARTLY_* settings (in .env or the shell: default model, claim check,
+    tier modes, ...) must not leak in, so every one is removed."""
+    for name in [n for n in os.environ if n.startswith("KARTLY_")]:
         monkeypatch.delenv(name, raising=False)
 
 

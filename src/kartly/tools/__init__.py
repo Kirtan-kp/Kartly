@@ -2,7 +2,7 @@
 
 from kartly.tools.base import CallContext, RiskTier, Tool, ToolEnv, ToolError
 from kartly.tools.orders import ORDER_TOOLS
-from kartly.tools.writes import WRITE_TOOLS
+from kartly.tools.writes import WRITE_TOOLS, write_tools
 
 
 def default_tools() -> tuple[Tool, ...]:
@@ -18,4 +18,5 @@ __all__ = [
     "ToolEnv",
     "ToolError",
     "default_tools",
+    "write_tools",
 ]

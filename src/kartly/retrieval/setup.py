@@ -7,7 +7,7 @@ from pathlib import Path
 from kartly.config import Settings
 from kartly.retrieval.chunking import KnowledgeBaseError, load_kb
 from kartly.retrieval.dense import DenseRetriever, Embedder, OllamaEmbedder
-from kartly.tools import WRITE_TOOLS, default_tools
+from kartly.tools import default_tools, write_tools
 from kartly.tools.base import Tool
 from kartly.tools.policy import policy_tool
 from kartly.tools.returns import RETURN_TOOLS
@@ -39,7 +39,9 @@ def gateway_tools(settings: Settings, *, cache_dir: Path | None = None) -> tuple
 
     A write tool is only offered to the model while its tier is not ``off`` (the gateway decides).
     """
-    tools = default_tools() + WRITE_TOOLS
+    tools = default_tools() + write_tools(
+        settings.refund_auto_limit_inr, settings.refund_daily_cap_inr
+    )
     if not settings.kb_dir:
         return tools
     cache = (cache_dir or Path("evals/runs")) / "embedding_cache.json"

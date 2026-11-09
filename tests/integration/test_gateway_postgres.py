@@ -134,3 +134,47 @@ def test_identical_calls_at_the_same_moment_cancel_the_order_once(
     assert sum(1 for r in results if r.ok and r.data and not r.data.get("replayed")) == 1
     with pg_factory() as session:
         assert len(session.scalars(select(Action)).all()) == 1
+
+
+def test_concurrent_refunds_cannot_pay_out_more_than_the_order_total(
+    pg_factory: sessionmaker[Session],
+) -> None:
+    """Five different refunds of about INR 600 race on a 2,898 order: the row lock lets exactly
+    four through. Without it each reads the same old total and all five succeed."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from kartly.gateway import Mode
+    from kartly.store.models import Order
+    from kartly.tools import RiskTier, default_tools
+    from kartly.tools.writes import make_refund_tool
+    from tests.support import real_ctx
+
+    modes = {RiskTier.LOW_RISK_WRITE: Mode.AUTO, RiskTier.MONEY: Mode.AUTO}
+    gw = ToolGateway(
+        pg_factory,
+        (*default_tools(), make_refund_tool(100_000, 100_000)),
+        clock=lambda: FIXED_NOW,
+        modes=modes,
+    )
+    ctx = real_ctx(pg_factory, "C-0001")
+    amounts = [600.00, 600.01, 600.02, 600.03, 600.04]
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        results = list(
+            pool.map(
+                lambda a: gw.call(
+                    ctx,
+                    "issue_refund",
+                    {"order_id": "KRT-100001", "amount_inr": a, "reason_code": "damaged"},
+                ),
+                amounts,
+            )
+        )
+    done = [r for r in results if r.ok]
+    assert len(done) == 4, [(r.error_code, r.message) for r in results]
+    assert all(r.error_code == "exceeds_refundable" for r in results if not r.ok)
+    with pg_factory() as session:
+        order = session.get(Order, "KRT-100001")
+        assert order is not None and order.refunded_paise <= order.total_paise
+        assert order.refunded_paise == sum(
+            round(a * 100) for a, r in zip(amounts, results, strict=True) if r.ok
+        )

@@ -276,7 +276,9 @@ A tier 3 tool (never autonomous) is a proposal in every mode. Every write call g
 
 An approval request holds a hash of the exact action (tool, arguments, customer). `ToolGateway.decide(approval_id, approve=..., actor=...)` runs the action only if the stored action still hashes to the same value, the request has not expired (24 hours), and the tool's own checks still pass, because the order may have changed while it waited. Every decision, including a refused one, is audited with the human's id.
 
-`cancel_order` (tier 1) cancels a whole order that is placed or confirmed. A packed order cannot be cancelled, as `kb/cancellation.md` says. A run that proposed an action ends as `awaiting_approval` and the ticket as `awaiting_approval`. The approvals API and the refund tool come next; see ADR-046.
+`cancel_order` (tier 1) cancels a whole order that is placed or confirmed. A packed order cannot be cancelled, as `kb/cancellation.md` says. A run that proposed an action ends as `awaiting_approval` and the ticket as `awaiting_approval`. 
+
+`issue_refund` (tier 2) refunds part or all of what is left on a delivered or cancelled order (a cancelled cash-on-delivery order has nothing to refund). The amount is in rupees with at most two decimals and a reason code; the model cannot pass a customer or an approval. A refund runs on its own in `auto` mode only if the order's refunds in total stay within INR 1,000 (`KARTLY_REFUND_AUTO_LIMIT_INR`; the same figure as `kb/refunds.md`, and a test ties them) *and* the customer's refunds in the last 24 hours stay within INR 5,000 (`KARTLY_REFUND_DAILY_CAP_INR`). Otherwise it becomes an approval request. The limit counts what the order has already been refunded, so two refunds of INR 600 do not slip past it. A human who approves a request is not stopped by the daily cap, but the amount is checked again against what is left on the order. Concurrent refunds on one order are serialised with a row lock (Postgres test). The approvals API comes next; see ADR-046 and ADR-047.
 
 ## Claim check
 
@@ -366,7 +368,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 **Week 4: write tools, approvals, idempotency.** In progress.
 
 - [x] 4a: gateway write path (off/shadow/auto, idempotency keys, proposals, approvals bound to a payload hash, expiry), `approvals` table, `cancel_order`
-- [ ] 4b: `issue_refund` (INR 1,000 auto limit, per-customer daily cap, human approval above it)
+- [x] 4b: `issue_refund` (INR 1,000 auto limit per order, per-customer daily cap, human approval above either, row lock against concurrent refunds)
 - [ ] 4c: approvals API (list, approve, reject) and the ticket state after a decision
 - [ ] 4d: write evals (shadow and auto graded on store state) and a red-team set for approval bypass
 
