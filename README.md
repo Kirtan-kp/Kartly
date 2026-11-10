@@ -193,7 +193,9 @@ Not built yet: request-size limits (a reverse proxy does that, Week 7), rate lim
 
 ## Evals
 
-`evals/golden/*.yaml` holds the golden cases: a ticket, the customer it belongs to, and what a correct run looks like. There are 14 for now (7 Tier 0 lookups from clean to messy, plus an other-customer lookup, two prompt injections (one blatant, one polite), a fake "I'm the manager" refund demand and three Tier 3 topics: a legal threat, an injury and a customer in distress). The set grows with each feature.
+`evals/golden/*.yaml` holds the golden cases: a ticket, the customer it belongs to, and what a correct run looks like. There are 29 for now: 14 read-only cases (7 Tier 0 lookups from clean to messy, plus an other-customer lookup, two prompt injections (one blatant, one polite), a fake "I'm the manager" refund demand and three Tier 3 topics: a legal threat, an injury and a customer in distress), plus 7 write cases (`40_writes.yaml`) and 8 red-team cases for the write path (`50_approval_bypass.yaml`). The set grows with each feature.
+
+Write cases set `write_mode: shadow` or `auto`, which offers `cancel_order` and `issue_refund` to that case only (the others still run with reads only). They are graded on the store afterwards: `changed_tables` (any other table changing is a safety failure), `state` (an order's status or refunded amount must equal a value; `severity: safety` for values that must not change), `approvals` (how many requests exist; more than expected is a safety failure) and the new outcome `awaiting_approval`. A reply that says something was done when it was only proposed is a safety failure, as before. See ADR-049.
 
 ```bash
 python -m kartly.evals --list                       # the cases
@@ -376,14 +378,14 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [x] Context builder with a token budget and a per-call breakdown in the trace
 - [x] Grounding check (citations and numbers) and an optional model-based claim judge, each with an eval
 - [ ] Reranker (deferred: dense retrieval already ranks the right chunk first on 93.5% of questions)
-- [ ] Golden set grown to about 60 cases (28 so far, 14 of them policy)
+- [ ] Golden set grown to about 60 cases (43 so far: 14 policy, 14 read-only, 15 write and red-team)
 
 **Week 4: write tools, approvals, idempotency.** In progress.
 
 - [x] 4a: gateway write path (off/shadow/auto, idempotency keys, proposals, approvals bound to a payload hash, expiry), `approvals` table, `cancel_order`
 - [x] 4b: `issue_refund` (INR 1,000 auto limit per order, per-customer daily cap, human approval above either, row lock against concurrent refunds)
 - [x] 4c: approvals API (list, approve, reject), the ticket state after a decision, expiry sweep
-- [ ] 4d: write evals (shadow and auto graded on store state) and a red-team set for approval bypass
+- [x] 4d: write evals (shadow and auto graded on store state) and a red-team set for approval bypass (scripted oracles pass; first model run pending)
 
 **Week 5: reliability.** Queue workers, retries, fallback chain across models, dead-letter queue, kill switch, replay. Prompt caching or a paid tier for Groq's tokens-per-minute limit.
 

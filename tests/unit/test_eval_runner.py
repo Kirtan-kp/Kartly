@@ -57,6 +57,7 @@ def test_a_perfect_trajectory_passes_every_check(case_id: str) -> None:
     assert result.checks and all(c.passed for c in result.checks)
     held = {
         "injection-in-message": "screened",  # handed to a human before any model call
+        "bypass-force-cancel-shipped": "screened",
         "tier3-legal-threat": "routed_tier3",
         "tier3-safety-injury": "routed_tier3",
         "tier3-distress": "routed_tier3",
@@ -85,7 +86,17 @@ def test_a_broken_trajectory_fails_exactly_the_expected_checks(broken: Broken) -
 
 def test_each_adversarial_case_has_a_broken_trajectory_that_trips_its_safety_checks() -> None:
     safety_cases = {b.case_id for b in BROKEN if "safety" in b.fails.values()}
-    assert safety_cases == {"idor-friends-order", "injection-polite-lookup", "fake-manager-refund"}
+    assert safety_cases == {
+        "idor-friends-order",
+        "injection-polite-lookup",
+        "fake-manager-refund",
+        "write-cancel-placed-shadow",
+        "write-refund-large-needs-approval",
+        "bypass-claimed-manager-approval",
+        "bypass-cancel-shipped-insist",
+        "bypass-refund-another-customers-order",
+        "bypass-refund-before-delivery",
+    }
 
 
 def test_with_the_screen_off_the_same_ticket_reaches_the_model() -> None:
@@ -312,11 +323,15 @@ def test_no_pause_means_no_sleep() -> None:
 def test_summary_of_a_perfect_run() -> None:
     results = run_all()
     summary = summarize(results, list(CASES.values()), "oracle")
-    assert (summary.passed, summary.failed, summary.errored) == (14, 0, 0)
+    assert (summary.passed, summary.failed, summary.errored) == (len(CASES), 0, 0)
     assert summary.pass_rate == 1.0 and summary.tier0_pass_rate == 1.0
     assert summary.safety_failures == 0 and summary.valid_call_rate == 1.0
     assert summary.total_cost_usd > 0 and summary.avg_tokens > 0
-    assert summary.unstable_cases == [] and summary.cases == 14 and summary.attempts == 14
+    assert (
+        summary.unstable_cases == []
+        and summary.cases == len(CASES)
+        and summary.attempts == len(CASES)
+    )
 
 
 def test_errors_are_left_out_of_the_pass_rate_but_counted() -> None:
@@ -325,8 +340,8 @@ def test_errors_are_left_out_of_the_pass_rate_but_counted() -> None:
     results[0].stop_reason = "llm_error"
     results[1].status = "fail"
     summary = summarize(results, list(CASES.values()), "m")
-    assert (summary.passed, summary.failed, summary.errored) == (12, 1, 1)
-    assert summary.pass_rate == pytest.approx(12 / 13)
+    assert (summary.passed, summary.failed, summary.errored) == (len(CASES) - 2, 1, 1)
+    assert summary.pass_rate == pytest.approx((len(CASES) - 2) / (len(CASES) - 1))
 
 
 def test_tier_zero_rate_ignores_other_tiers() -> None:
@@ -335,7 +350,9 @@ def test_tier_zero_rate_ignores_other_tiers() -> None:
     assert refund.tier == 2
     refund.status = "fail"
     summary = summarize(results, list(CASES.values()), "m")
-    assert summary.tier0_pass_rate == 1.0 and summary.pass_rate == pytest.approx(13 / 14)
+    assert summary.tier0_pass_rate == 1.0 and summary.pass_rate == pytest.approx(
+        (len(CASES) - 1) / len(CASES)
+    )
 
 
 def test_a_safety_failure_is_counted_even_in_an_errored_run() -> None:
@@ -375,11 +392,11 @@ def test_percentiles_use_nearest_rank() -> None:
 
 
 def test_latency_percentiles_come_from_graded_runs_only() -> None:
-    results = run_all()
+    results = run_all()[:14]  # fourteen results keep the expected percentiles easy to read
     for latency, result in zip(range(1, 15), results, strict=True):
         result.latency_s = float(latency)
     results[13].status = "error"  # the slowest one errored: it must not count
-    summary = summarize(results, list(CASES.values()), "m")
+    summary = summarize(results, list(CASES.values())[:14], "m")
     assert (summary.p50_s, summary.p95_s) == (7.0, 13.0)
 
 
@@ -454,8 +471,8 @@ def test_save_run_writes_results_and_appends_to_the_experiment_log(tmp_path: Pat
 
     assert path.name == "20261029-083005_groq_small_model.json"
     document = json.loads(path.read_text())
-    assert document["note"] == "first baseline" and len(document["results"]) == 14
-    assert document["summary"]["passed"] == 14
+    assert document["note"] == "first baseline" and len(document["results"]) == len(CASES)
+    assert document["summary"]["passed"] == len(CASES)
     assert document["results"][0]["checks"][0]["name"] == "store_unchanged"
     assert document["results"][0]["trace"]["steps"]  # enough to diagnose a failure later
 

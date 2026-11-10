@@ -39,10 +39,11 @@ def write(tmp_path: Path, cases: Any, name: str = "cases.yaml") -> Path:
 # ------------------------------------------------------------------------- the golden set
 
 
-def test_the_golden_set_has_fourteen_valid_cases_with_unique_ids() -> None:
+def test_the_golden_set_has_29_valid_cases_with_unique_ids() -> None:
     cases = load_cases(GOLDEN)
-    assert len(cases) == 14
-    assert len({c.id for c in cases}) == 14
+    assert len(cases) == 29
+    assert len({c.id for c in cases}) == 29
+    assert sum(c.write_mode is not None for c in cases) == 15  # 7 write cases, 8 red-team cases
 
 
 def test_tier_zero_cases_come_first_and_every_case_is_documented() -> None:

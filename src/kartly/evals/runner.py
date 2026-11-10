@@ -22,22 +22,22 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from kartly.evals.cases import Case
 from kartly.evals.grader import Check, Evidence, ToolCallEvidence, grade, passed
-from kartly.gateway import ToolGateway
+from kartly.gateway import Mode, ToolGateway
 from kartly.guards import screen_text
 from kartly.guards.claims import ClaimJudge
 from kartly.llm import ChatClient
 from kartly.orchestrator import RunBudget, TicketRunner, load_trace
 from kartly.orchestrator.prompts import DEFAULT_POLICY_PROMPT, prompt_version
 from kartly.sanitize import clean_str
-from kartly.store.models import Action, Customer, Order, OrderItem, Shipment
+from kartly.store.models import Action, Approval, Customer, Order, OrderItem, Shipment
 from kartly.store.seed import seed_mock_store
 from kartly.store.sqlite import make_sqlite_engine
-from kartly.tools import Tool
+from kartly.tools import RiskTier, Tool, default_tools, write_tools
 
 EVAL_NOW = datetime(2026, 10, 23, 12, 0, 0, tzinfo=UTC)
 # What the agent must not change while answering a question. Tickets, messages, runs and the
@@ -119,8 +119,26 @@ def snapshot_store(session: Session) -> dict[str, str]:
     return digests
 
 
+def read_state(session: Session, case: Case) -> dict[str, object]:
+    """The order values a case asked to check, as they are after the run."""
+    values: dict[str, object] = {}
+    for check in case.expect.state:
+        order = session.get(Order, check.id)
+        value: object = None
+        if order is not None:
+            value = getattr(order, check.field)
+            value = getattr(value, "value", value)  # enums to their stored text
+        values[f"orders.{check.id}.{check.field}"] = value
+    return values
+
+
 def _evidence(
-    trace: dict[str, Any], outcome: str, answer: str | None, changed: list[str]
+    trace: dict[str, Any],
+    outcome: str,
+    answer: str | None,
+    changed: list[str],
+    approvals: int = 0,
+    state: dict[str, object] | None = None,
 ) -> Evidence:
     calls = []
     for step in trace["steps"]:
@@ -141,7 +159,7 @@ def _evidence(
         for a in trace["audit"]
         if a["details"] and a["details"].get("security_event")
     )
-    return Evidence(outcome, answer, calls, events, changed)
+    return Evidence(outcome, answer, calls, events, changed, approvals, state or {})
 
 
 def run_case(
@@ -165,7 +183,16 @@ def run_case(
             session.commit()
         with factory() as session:  # a fresh session: rows as the database stores them
             before = snapshot_store(session)
-        gateway = ToolGateway(factory, tools, clock=lambda: EVAL_NOW)
+        case_tools: Sequence[Tool] | None = tools
+        modes = None
+        if case.write_mode is not None:  # write tools are offered only to cases that ask for them
+            case_tools = (*(tools if tools is not None else default_tools()), *write_tools())
+            mode = Mode(case.write_mode)
+            modes = {RiskTier.LOW_RISK_WRITE: mode, RiskTier.MONEY: mode}
+        if modes is None:
+            gateway = ToolGateway(factory, case_tools, clock=lambda: EVAL_NOW)
+        else:
+            gateway = ToolGateway(factory, case_tools, clock=lambda: EVAL_NOW, modes=modes)
         runner = TicketRunner(
             factory,
             client,
@@ -188,11 +215,13 @@ def run_case(
         with factory() as session:
             changed = [t for t, d in snapshot_store(session).items() if d != before[t]]
             trace = load_trace(session, summary.run_id)
+            approvals = session.scalar(select(func.count()).select_from(Approval)) or 0
+            state = read_state(session, case)
         assert trace is not None
     finally:
         engine.dispose()
 
-    evidence = _evidence(trace, summary.outcome, summary.answer, changed)
+    evidence = _evidence(trace, summary.outcome, summary.answer, changed, approvals, state)
     checks = grade(case, evidence)
     stop = str(summary.stop_reason)
     status = "pass" if passed(checks) else "fail"

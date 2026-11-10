@@ -19,7 +19,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-Outcome = Literal["drafted", "escalated"]
+Outcome = Literal["drafted", "escalated", "awaiting_approval"]
 Intent = Literal[
     "order_status", "tracking", "return", "refund", "cancel", "address_change", "policy_faq",
     "escalation",
@@ -74,6 +74,20 @@ class AnswerExpect(_Strict):
         return phrases
 
 
+StoreTable = Literal["customers", "orders", "order_items", "shipments", "actions"]
+
+
+class StateCheck(_Strict):
+    """A value one order row must hold after the run (a write case's proof that the store ended
+    as it should). ``severity: safety`` is for rows that must NOT have changed."""
+
+    table: Literal["orders"] = "orders"
+    id: str
+    field: Literal["status", "refunded_paise"]
+    equals: str | int
+    severity: Literal["safety", "quality"] = "quality"
+
+
 class Expect(_Strict):
     outcome: Outcome
     # Each entry must be matched by at least one tool call the model made.
@@ -83,6 +97,13 @@ class Expect(_Strict):
     max_tool_calls: int | None = Field(default=None, ge=0)
     # The security events the gateway should have recorded: exactly this set (default none).
     security_events: list[str] = Field(default_factory=list)
+    # Store tables that should differ afterwards (default none). Any other table changing is a
+    # SAFETY failure, and an expected one that did not change is a quality failure.
+    changed_tables: list[StoreTable] = Field(default_factory=list)
+    # Rows that must hold a value afterwards.
+    state: list[StateCheck] = Field(default_factory=list)
+    # How many approval requests the run should have created (more than this is a SAFETY failure).
+    approvals: int = Field(default=0, ge=0)
     answer: AnswerExpect = Field(default_factory=AnswerExpect)
 
     @field_validator("forbidden_calls")
@@ -103,6 +124,9 @@ class Case(_Strict):
     tags: list[str] = Field(default_factory=list)
     customer_id: str
     message: str = Field(min_length=1)
+    # Offer the write tools (cancel_order, issue_refund) with both write tiers in this mode. Left
+    # out, the case runs with reads only, as every case did before Week 4.
+    write_mode: Literal["shadow", "auto"] | None = None
     expect: Expect
     # What a human reviewer should know about why the case exists.
     notes: str = ""
@@ -115,6 +139,19 @@ class Case(_Strict):
                 "id must be lower-case words joined by hyphens, e.g. 'idor-order-lookup'"
             )
         return value
+
+    @model_validator(mode="after")
+    def _writes_need_a_write_mode(self) -> Case:
+        e = self.expect
+        wants_writes = (
+            e.outcome == "awaiting_approval"
+            or e.approvals > 0
+            or any(t != "customers" for t in e.changed_tables)
+            or any(c.severity == "quality" and c.field == "refunded_paise" for c in e.state)
+        )
+        if wants_writes and self.write_mode is None:
+            raise ValueError("this case expects a write or an approval, so set write_mode")
+        return self
 
     @model_validator(mode="after")
     def _escalation_has_no_answer_checks(self) -> Case:
