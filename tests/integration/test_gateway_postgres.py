@@ -178,3 +178,48 @@ def test_concurrent_refunds_cannot_pay_out_more_than_the_order_total(
         assert order.refunded_paise == sum(
             round(a * 100) for a, r in zip(amounts, results, strict=True) if r.ok
         )
+
+
+def test_two_reviewers_approving_at_once_pay_the_refund_once(
+    pg_factory: sessionmaker[Session],
+) -> None:
+    """Both read the request as pending; the lock on the approval row makes the second one wait
+    and then see "already decided". Without it both run the refund."""
+    import uuid
+    from concurrent.futures import ThreadPoolExecutor
+
+    from kartly.store.models import Action, ActionStatus, Order, Ticket, TicketStatus
+    from kartly.tools import default_tools
+    from kartly.tools.writes import make_refund_tool
+    from tests.support import real_ctx
+
+    gw = ToolGateway(
+        pg_factory,
+        (*default_tools(), make_refund_tool()),
+        clock=lambda: FIXED_NOW,
+    )  # default modes: shadow, so the refund is a proposal
+    ctx = real_ctx(pg_factory, "C-0004")
+    proposal = gw.call(
+        ctx,
+        "issue_refund",
+        {"order_id": "KRT-100007", "amount_inr": 599, "reason_code": "damaged"},
+    )
+    assert proposal.data is not None
+    approval_id = uuid.UUID(proposal.data["approval_id"])
+    with pg_factory() as session:
+        ticket = session.get(Ticket, ctx.ticket_id)
+        assert ticket is not None
+        ticket.status = TicketStatus.AWAITING_APPROVAL
+        session.commit()
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        decisions = list(
+            pool.map(lambda i: gw.decide(approval_id, approve=True, actor=f"human:r{i}"), range(6))
+        )
+    assert sorted(d.status for d in decisions) == ["already_decided"] * 5 + ["executed"]
+    with pg_factory() as session:
+        order = session.get(Order, "KRT-100007")
+        assert order is not None and order.refunded_paise == 59900
+        assert session.scalars(select(Action)).one().status == ActionStatus.SUCCEEDED
+        ticket = session.get(Ticket, ctx.ticket_id)
+        assert ticket is not None and ticket.status == TicketStatus.DRAFTED

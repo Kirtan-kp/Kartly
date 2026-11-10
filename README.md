@@ -278,7 +278,20 @@ An approval request holds a hash of the exact action (tool, arguments, customer)
 
 `cancel_order` (tier 1) cancels a whole order that is placed or confirmed. A packed order cannot be cancelled, as `kb/cancellation.md` says. A run that proposed an action ends as `awaiting_approval` and the ticket as `awaiting_approval`. 
 
-`issue_refund` (tier 2) refunds part or all of what is left on a delivered or cancelled order (a cancelled cash-on-delivery order has nothing to refund). The amount is in rupees with at most two decimals and a reason code; the model cannot pass a customer or an approval. A refund runs on its own in `auto` mode only if the order's refunds in total stay within INR 1,000 (`KARTLY_REFUND_AUTO_LIMIT_INR`; the same figure as `kb/refunds.md`, and a test ties them) *and* the customer's refunds in the last 24 hours stay within INR 5,000 (`KARTLY_REFUND_DAILY_CAP_INR`). Otherwise it becomes an approval request. The limit counts what the order has already been refunded, so two refunds of INR 600 do not slip past it. A human who approves a request is not stopped by the daily cap, but the amount is checked again against what is left on the order. Concurrent refunds on one order are serialised with a row lock (Postgres test). The approvals API comes next; see ADR-046 and ADR-047.
+`issue_refund` (tier 2) refunds part or all of what is left on a delivered or cancelled order (a cancelled cash-on-delivery order has nothing to refund). The amount is in rupees with at most two decimals and a reason code; the model cannot pass a customer or an approval. A refund runs on its own in `auto` mode only if the order's refunds in total stay within INR 1,000 (`KARTLY_REFUND_AUTO_LIMIT_INR`; the same figure as `kb/refunds.md`, and a test ties them) *and* the customer's refunds in the last 24 hours stay within INR 5,000 (`KARTLY_REFUND_DAILY_CAP_INR`). Otherwise it becomes an approval request. The limit counts what the order has already been refunded, so two refunds of INR 600 do not slip past it. A human who approves a request is not stopped by the daily cap, but the amount is checked again against what is left on the order. Concurrent refunds on one order are serialised with a row lock (Postgres test). Approvals are decided through the API below; see ADR-046, ADR-047 and ADR-048.
+
+### Approvals API
+
+All routes need the `X-API-Key` header.
+
+| Route | What it does |
+|---|---|
+| `GET /v1/approvals?status=pending` | Requests for a human (`pending` by default; `approved`, `rejected`, `expired` or `all`). Each shows the customer, tool, arguments, why it needs approval (`shadow_mode`, `over_auto_limit`, `daily_cap`) and what it would do. Closes any request past its 24 hours first and reports how many (`expired_now`). |
+| `GET /v1/approvals/{id}` | One request, with what happened once decided. |
+| `POST /v1/approvals/{id}/approve` | Body `{"reviewer": "maya", "note": "..."}`. Runs the action once, after the hash, expiry and tool checks. 200 if done, 409 with a `result` (`expired`, `already_decided`, `not_executed`, `refused`) if not. |
+| `POST /v1/approvals/{id}/reject` | Same body. Nothing changes in the store. |
+
+The reviewer name is asserted by the caller and recorded as `human:<name>` in the audit log, since the API key is shared. When none of a ticket's requests is pending any more, the ticket leaves `awaiting_approval`: `drafted` if every action was carried out, `escalated` if any was rejected, expired, refused or failed, so a person follows up. Two reviewers deciding at once are serialised by a row lock; the second gets `already_decided`. The customer is not notified yet. See ADR-048.
 
 ## Claim check
 
@@ -369,7 +382,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 
 - [x] 4a: gateway write path (off/shadow/auto, idempotency keys, proposals, approvals bound to a payload hash, expiry), `approvals` table, `cancel_order`
 - [x] 4b: `issue_refund` (INR 1,000 auto limit per order, per-customer daily cap, human approval above either, row lock against concurrent refunds)
-- [ ] 4c: approvals API (list, approve, reject) and the ticket state after a decision
+- [x] 4c: approvals API (list, approve, reject), the ticket state after a decision, expiry sweep
 - [ ] 4d: write evals (shadow and auto graded on store state) and a red-team set for approval bypass
 
 **Week 5: reliability.** Queue workers, retries, fallback chain across models, dead-letter queue, kill switch, replay. Prompt caching or a paid tier for Groq's tokens-per-minute limit.

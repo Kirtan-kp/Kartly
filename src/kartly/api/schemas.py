@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -130,3 +130,45 @@ class TraceOut(BaseModel):
 
 class Health(BaseModel):
     status: str
+
+
+class ApprovalDecide(BaseModel):
+    """Who is deciding and, optionally, why. The API key is shared, so the reviewer name is
+    asserted by the caller (the admin tool that authenticated the person) and recorded as is."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.@-]+$")
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ApprovalOut(BaseModel):
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    customer_id: str
+    status: str
+    reason: str
+    tool: str
+    args: dict[str, Any]
+    preview: dict[str, Any] | None  # what it would do (while pending)
+    outcome: dict[str, Any] | None  # what happened, once decided
+    action_status: str
+    requested_at: datetime
+    expires_at: datetime
+    decided_by: str | None
+    decided_at: datetime | None
+    decision_note: str | None
+
+
+class ApprovalList(BaseModel):
+    approvals: list[ApprovalOut]
+    expired_now: int  # requests this call found past their expiry and closed
+
+
+class DecisionOut(BaseModel):
+    approval_id: uuid.UUID
+    ok: bool
+    result: Literal["executed", "not_executed", "rejected", "expired", "already_decided", "refused"]
+    message: str
+    data: dict[str, Any] | None
+    ticket_status: str | None

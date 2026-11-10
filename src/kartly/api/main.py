@@ -41,14 +41,15 @@ def create_app_from_env() -> FastAPI:
     )
     engine = make_engine()
     factory = make_session_factory(engine)
+    gateway = ToolGateway(
+        factory,
+        gateway_tools(settings),
+        modes=modes_from_settings(settings.tier1_mode, settings.tier2_mode),
+    )
     runner = TicketRunner(
         factory,
         client,
-        ToolGateway(
-            factory,
-            gateway_tools(settings),
-            modes=modes_from_settings(settings.tier1_mode, settings.tier2_mode),
-        ),
+        gateway,
         model_tier=model_name,
         router=router,
         claim_judge=ClaimJudge(judge_client) if judge_client is not None else None,
@@ -59,6 +60,7 @@ def create_app_from_env() -> FastAPI:
         runner=runner,
         executor=BoundedExecutor(settings.max_workers, settings.max_pending_runs),
         api_key=settings.api_key,
+        gateway=gateway,
     )
 
     def cleanup() -> None:

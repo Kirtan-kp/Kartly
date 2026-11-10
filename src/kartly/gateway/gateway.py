@@ -45,6 +45,7 @@ from kartly.store.models import (
     ApprovalStatus,
     AuditLog,
     Ticket,
+    TicketStatus,
 )
 from kartly.tools import Tool, ToolEnv, ToolError, default_tools
 from kartly.tools.base import CallContext, RiskTier
@@ -115,6 +116,28 @@ class ToolResult:
         else:
             payload = {"ok": False, "error": {"code": self.error_code, "message": self.message}}
         return json.dumps(payload, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _settle_ticket(session: Session, ticket: Ticket) -> None:
+    """Move a ticket out of ``awaiting_approval`` once none of its requests is pending.
+
+    All requests done and carried out: ``drafted`` (a human sends the reply, which can now say it
+    is done). Any rejected, expired, refused or failed: ``escalated``, so a person follows up
+    rather than the customer being told something happened that did not.
+    """
+    if ticket.status != TicketStatus.AWAITING_APPROVAL:
+        return
+    session.flush()
+    rows = session.execute(
+        select(Approval.status, Action.status)
+        .join(Action, Approval.action_id == Action.id)
+        .where(Approval.ticket_id == ticket.id)
+    ).all()
+    if any(approval is ApprovalStatus.PENDING for approval, _ in rows):
+        return
+    # A rejected or expired request leaves its action rejected, so the action status says it.
+    failed = any(action in (ActionStatus.FAILED, ActionStatus.REJECTED) for _, action in rows)
+    ticket.status = TicketStatus.ESCALATED if failed else TicketStatus.DRAFTED
 
 
 @dataclass(frozen=True)
@@ -394,7 +417,9 @@ class ToolGateway:
         note: str | None,
         now: datetime,
     ) -> Decision:
-        approval = session.get(Approval, approval_id)
+        # Lock the request, so two reviewers deciding at once are handled one after the other and
+        # the second sees "already decided" instead of running the action again.
+        approval = session.get(Approval, approval_id, with_for_update=True, populate_existing=True)
         if approval is None:
             return Decision(False, "refused", "No such approval request.")
         action = session.get(Action, approval.action_id)
@@ -429,12 +454,14 @@ class ToolGateway:
             action.status = ActionStatus.REJECTED
             action.result = {"error_code": "approval_expired", "message": "Approval expired."}
             audit("expired")
+            _settle_ticket(session, ticket)
             return Decision(False, "expired", "This request expired before it was decided.")
         if not approve:
             close(ApprovalStatus.REJECTED)
             action.status = ActionStatus.REJECTED
             action.result = {"error_code": "approval_rejected", "message": "A human rejected it."}
             audit("rejected", note=clean_str(note, MAX_NOTE_CHARS) if note else None)
+            _settle_ticket(session, ticket)
             return Decision(True, "rejected", "Rejected. Nothing was changed.")
 
         tool = self._tools.get(action.tool_name)
@@ -443,11 +470,13 @@ class ToolGateway:
             action.status = ActionStatus.REJECTED
             action.result = {"error_code": "payload_changed", "message": "The action changed."}
             audit("payload_mismatch", security_event="approval_payload_mismatch")
+            _settle_ticket(session, ticket)
             return Decision(False, "refused", "The action no longer matches what was proposed.")
         if tool is None:
             close(ApprovalStatus.REJECTED)
             action.status = ActionStatus.FAILED
             audit("tool_missing")
+            _settle_ticket(session, ticket)
             return Decision(False, "refused", "That tool is no longer available.")
 
         args = tool.args_model.model_validate(action.args)
@@ -458,9 +487,49 @@ class ToolGateway:
         )
         close(ApprovalStatus.APPROVED)
         audit("approved", outcome=outcome.outcome, error_code=outcome.result.error_code)
+        _settle_ticket(session, ticket)
         if outcome.result.ok:
             return Decision(True, "executed", "Done.", outcome.result.data)
         return Decision(False, "not_executed", outcome.result.message or "It could not be done.")
+
+    def expire_stale(self) -> int:
+        """Mark every pending request past its expiry as expired; returns how many.
+
+        Nothing runs on a timer yet, so the API calls this before it lists requests. An expired
+        request can no longer be approved (``decide`` also checks), and its ticket goes to a human.
+        """
+        now = self._clock()
+        count = 0
+        with self._session_factory() as session:
+            pending = session.scalars(
+                select(Approval).where(Approval.status == ApprovalStatus.PENDING).with_for_update()
+            ).all()
+            for approval in pending:
+                if now < utc(approval.expires_at):
+                    continue
+                action = session.get(Action, approval.action_id)
+                ticket = session.get(Ticket, approval.ticket_id)
+                assert action is not None and ticket is not None
+                approval.status = ApprovalStatus.EXPIRED
+                approval.decided_at = now
+                action.status = ActionStatus.REJECTED
+                action.result = {"error_code": "approval_expired", "message": "Approval expired."}
+                session.add(
+                    AuditLog(
+                        actor_type=ActorType.SYSTEM,
+                        actor_id="gateway",
+                        action="approval.expired",
+                        ticket_id=approval.ticket_id,
+                        run_id=action.run_id,
+                        target_type="approval",
+                        target_id=str(approval.id),
+                        details={"action_id": str(action.id), "tool": action.tool_name},
+                    )
+                )
+                _settle_ticket(session, ticket)
+                count += 1
+            session.commit()
+        return count
 
     # --------------------------------------------------------------- the write path
 

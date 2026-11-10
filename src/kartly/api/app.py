@@ -3,6 +3,9 @@
     POST /v1/tickets            create a ticket and start an agent run (202; ?wait=true waits)
     GET  /v1/tickets/{id}       status, messages (the draft reply is the last agent message), runs
     GET  /v1/runs/{id}/trace    every model and tool call of a run, plus the gateway's audit rows
+    GET  /v1/approvals          requests for a human (?status=pending|approved|rejected|expired|all)
+    GET  /v1/approvals/{id}     one request: what it would do, or what happened
+    POST /v1/approvals/{id}/approve | /reject   a human decides (approving runs the action once)
     GET  /healthz               liveness and a database check (no key needed)
 
 Security stance: every /v1 route needs the API key. The ``customer_id`` on a ticket is asserted by
@@ -19,9 +22,9 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
@@ -30,6 +33,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from kartly.api.executor import Busy, RunExecutor
 from kartly.api.schemas import (
+    ApprovalDecide,
+    ApprovalList,
+    ApprovalOut,
+    DecisionOut,
     Health,
     MessageOut,
     RunOut,
@@ -38,9 +45,10 @@ from kartly.api.schemas import (
     TicketOut,
     TraceOut,
 )
+from kartly.gateway import ToolGateway
 from kartly.orchestrator import TicketRunner, UnknownCustomerError, load_trace
 from kartly.sanitize import clean_str
-from kartly.store.models import Ticket
+from kartly.store.models import Action, Approval, ApprovalStatus, Ticket
 
 SessionFactory = Callable[[], Session]
 
@@ -52,6 +60,7 @@ class ApiState:
     executor: RunExecutor
     api_key: str
     wait_timeout_s: float = 150.0  # a little over the run's own 120 s limit
+    gateway: ToolGateway | None = None  # needed for the approval routes
 
 
 def _state(request: Request) -> ApiState:
@@ -239,6 +248,129 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         if trace is None:
             raise HTTPException(status_code=404, detail="run not found")
         return trace
+
+    def _gateway(state: ApiState) -> ToolGateway:
+        if state.gateway is None:
+            raise HTTPException(status_code=503, detail="approvals are not configured")
+        return state.gateway
+
+    def _approval_out(db: Session, approval: Approval) -> ApprovalOut:
+        action = db.get(Action, approval.action_id)
+        ticket = db.get(Ticket, approval.ticket_id)
+        assert action is not None and ticket is not None
+        result = action.result if isinstance(action.result, dict) else None
+        waiting = approval.status is ApprovalStatus.PENDING
+        preview = result.get("preview") if waiting and result else None
+        return ApprovalOut(
+            id=approval.id,
+            ticket_id=approval.ticket_id,
+            customer_id=ticket.customer_id,
+            status=approval.status.value,
+            reason=approval.reason,
+            tool=action.tool_name,
+            args=action.args,
+            preview=preview if isinstance(preview, dict) else None,
+            outcome=None if waiting else result,
+            action_status=action.status.value,
+            requested_at=approval.requested_at,
+            expires_at=approval.expires_at,
+            decided_by=approval.decided_by,
+            decided_at=approval.decided_at,
+            decision_note=approval.decision_note,
+        )
+
+    @app.get(
+        "/v1/approvals",
+        response_model=ApprovalList,
+        dependencies=[Depends(require_api_key)],
+        tags=["approvals"],
+    )
+    def list_approvals(
+        state: StateDep,
+        db: DbDep,
+        status: Literal["pending", "approved", "rejected", "expired", "all"] = "pending",
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> ApprovalList:
+        expired_now = _gateway(state).expire_stale()
+        query = select(Approval).order_by(Approval.requested_at, Approval.id).limit(limit)
+        if status != "all":
+            query = query.where(Approval.status == ApprovalStatus(status))
+        rows = db.scalars(query).all()
+        return ApprovalList(
+            approvals=[_approval_out(db, row) for row in rows], expired_now=expired_now
+        )
+
+    @app.get(
+        "/v1/approvals/{approval_id}",
+        response_model=ApprovalOut,
+        dependencies=[Depends(require_api_key)],
+        tags=["approvals"],
+    )
+    def get_approval(approval_id: uuid.UUID, db: DbDep) -> ApprovalOut:
+        approval = db.get(Approval, approval_id)
+        if approval is None:
+            raise HTTPException(status_code=404, detail="approval not found")
+        return _approval_out(db, approval)
+
+    def _decide(
+        state: ApiState,
+        approval_id: uuid.UUID,
+        body: ApprovalDecide,
+        response: Response,
+        *,
+        approve: bool,
+    ) -> DecisionOut:
+        gateway = _gateway(state)
+        # Short sessions of their own: none is open while the gateway decides, so the decision
+        # never waits on (or is blocked by) a transaction this request started.
+        with state.session_factory() as session:
+            if session.get(Approval, approval_id) is None:
+                raise HTTPException(status_code=404, detail="approval not found")
+        decision = gateway.decide(
+            approval_id, approve=approve, actor=f"human:{body.reviewer}", note=body.note
+        )
+        with state.session_factory() as session:
+            approval = session.get(Approval, approval_id)
+            ticket = session.get(Ticket, approval.ticket_id) if approval else None
+            ticket_status = ticket.status.value if ticket else None
+        if not decision.ok:
+            response.status_code = 409
+        return DecisionOut(
+            approval_id=approval_id,
+            ok=decision.ok,
+            result=decision.status,  # type: ignore[arg-type]
+            message=decision.message,
+            data=decision.data,
+            ticket_status=ticket_status,
+        )
+
+    @app.post(
+        "/v1/approvals/{approval_id}/approve",
+        response_model=DecisionOut,
+        dependencies=[Depends(require_api_key)],
+        tags=["approvals"],
+    )
+    def approve(
+        approval_id: uuid.UUID,
+        body: ApprovalDecide,
+        state: StateDep,
+        response: Response,
+    ) -> DecisionOut:
+        return _decide(state, approval_id, body, response, approve=True)
+
+    @app.post(
+        "/v1/approvals/{approval_id}/reject",
+        response_model=DecisionOut,
+        dependencies=[Depends(require_api_key)],
+        tags=["approvals"],
+    )
+    def reject(
+        approval_id: uuid.UUID,
+        body: ApprovalDecide,
+        state: StateDep,
+        response: Response,
+    ) -> DecisionOut:
+        return _decide(state, approval_id, body, response, approve=False)
 
     return app
 
