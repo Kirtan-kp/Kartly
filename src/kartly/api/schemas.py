@@ -172,3 +172,28 @@ class DecisionOut(BaseModel):
     message: str
     data: dict[str, Any] | None
     ticket_status: str | None
+
+
+class ControlSet(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str = Field(min_length=1, max_length=20)
+    reviewer: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.@-]+$")
+    reason: str | None = Field(default=None, max_length=300)
+
+
+class ControlOut(BaseModel):
+    name: str
+    value: str
+    allowed: list[str]
+    reason: str | None
+    updated_by: str | None
+    updated_at: datetime | None  # None: never changed, the default applies
+
+
+class ControlList(BaseModel):
+    controls: list[ControlOut]
+
+
+class ControlChanged(ControlOut):
+    changed: bool

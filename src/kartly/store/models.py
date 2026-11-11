@@ -434,3 +434,15 @@ class AuditLog(Base):
     target_type: Mapped[str | None] = mapped_column(String(40))
     target_id: Mapped[str | None] = mapped_column(String(64))
     details: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE)
+
+
+class Control(Base):
+    """A switch an operator can flip without a deploy: one row per control, read on every use."""
+
+    __tablename__ = "controls"
+
+    name: Mapped[str] = mapped_column(String(40), primary_key=True)
+    value: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str | None] = mapped_column(String(300))
+    updated_by: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

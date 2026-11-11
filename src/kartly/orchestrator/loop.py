@@ -52,6 +52,7 @@ class StopReason(enum.StrEnum):
     GATEWAY_ERROR = "gateway_error"  # the gateway failed closed (for example, audit write failed)
     SCREENED = "screened"  # the injection screen sent the ticket to a human; no model call was made
     ROUTED_TIER3 = "routed_tier3"  # a hard rule marked it never-autonomous; no model call was made
+    KILL_SWITCH = "kill_switch"  # the agent is switched off: a human takes it, no model call
     UNGROUNDED = "ungrounded"  # the reply cited or stated something the tools never returned
 
 

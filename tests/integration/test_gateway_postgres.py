@@ -223,3 +223,24 @@ def test_two_reviewers_approving_at_once_pay_the_refund_once(
         assert session.scalars(select(Action)).one().status == ActionStatus.SUCCEEDED
         ticket = session.get(Ticket, ctx.ticket_id)
         assert ticket is not None and ticket.status == TicketStatus.DRAFTED
+
+
+def test_two_operators_flipping_a_new_control_at_once_do_not_crash(
+    pg_factory: sessionmaker[Session],
+) -> None:
+    """The first change to a control inserts its row; two at once both try to. One must win and
+    the other must retry as an update, not fail with a duplicate key."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from kartly.controls import Controls
+
+    controls = Controls(pg_factory)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda i: controls.set("agent", "off", f"op{i}", "race"), range(6)))
+    assert controls.get("agent").value == "off"
+    assert [changed for _, changed in results].count(True) == 1  # one flipped it, five found it off
+    with pg_factory() as session:
+        from kartly.store.models import AuditLog
+
+        rows = list(session.scalars(select(AuditLog).where(AuditLog.action == "control.set")))
+        assert len(rows) == 1

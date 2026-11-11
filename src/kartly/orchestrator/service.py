@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from kartly.context import ContextBuilder
 from kartly.context.builder import DEFAULT_BUDGET_TOKENS
+from kartly.controls import AGENT, Controls
 from kartly.gateway import ToolGateway
 from kartly.guards import ScreenResult, screen_text
 from kartly.guards.claims import ClaimJudge, ClaimVerdict, judge_reply, problems_for
@@ -105,6 +106,7 @@ class TicketRunner:
             check_grounding
         ),
         claim_judge: ClaimJudge | None = None,
+        controls: Controls | None = None,
     ) -> None:
         """``screen`` checks customer text for prompt injection before any model call (default
         on); a suspicious ticket goes straight to a human. ``rules`` is the same for Tier 3
@@ -113,7 +115,8 @@ class TicketRunner:
         human. Off by default. If the router fails the ticket carries on to the resolver (it is
         recorded in the trace). ``claim_judge`` is a model that reads a policy reply that passed
         the grounding check and holds it if a statement is not in the policy text (off by
-        default; a judge that fails also holds the reply)."""
+        default; a judge that fails also holds the reply). ``controls`` holds the operator switches:
+        with the agent switched off, a ticket goes to a human before anything else happens."""
         self._sessions = session_factory
         self._screen = screen
         self._rules = rules
@@ -124,6 +127,7 @@ class TicketRunner:
         self._context = ContextBuilder(context_budget)
         self._grounding = grounding
         self._claim_judge = claim_judge
+        self._controls = controls
         self._loop = AgentLoop(client, gateway, budget=budget, allowed_tools=allowed_tools)
         # The policy rules go into the prompt only when the model can actually call the tool.
         self._policy = any(spec["function"]["name"] == "search_policy" for spec in self._loop.specs)
@@ -166,6 +170,8 @@ class TicketRunner:
 
     def run(self, ticket_id: uuid.UUID) -> RunSummary:
         run_id, customer_id, thread = self._open_run(ticket_id)
+        if self._controls is not None and not self._controls.agent_on():
+            return self._close_switched_off(run_id, ticket_id)
         verdict = self._screen_thread(thread)
         if verdict.suspicious:
             return self._close_screened(run_id, ticket_id, verdict)
@@ -310,6 +316,23 @@ class TicketRunner:
                 "security_event": "prompt_injection_suspected",
                 "rules": list(verdict.rules),
             },
+        )
+
+    def _close_switched_off(self, run_id: uuid.UUID, ticket_id: uuid.UUID) -> RunSummary:
+        """The agent is switched off: hand the ticket to a human without any model call."""
+        assert self._controls is not None
+        state = self._controls.get(AGENT)
+        reason = state.reason or "no reason given"
+        return self._close_held(
+            run_id,
+            ticket_id,
+            stage="kill_switch",
+            stop=StopReason.KILL_SWITCH,
+            detail=f"the agent is switched off by {state.updated_by}: {reason}",
+            step_input={"control": AGENT, "value": state.value},
+            audit_action="kill_switch.held",
+            audit_actor="kill_switch",
+            audit_details={"control": AGENT, "set_by": state.updated_by, "reason": state.reason},
         )
 
     def _close_routed(

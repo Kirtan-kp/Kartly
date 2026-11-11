@@ -307,6 +307,23 @@ The API wraps the default model in a `ResilientClient`. Set `KARTLY_FALLBACK_MOD
 
 Retrying is safe because a model call changes nothing; tools are never re-run by this layer. The run's trace records the model that really answered, and `attempts` and `failed_over_from` when there was trouble. See ADR-050.
 
+## Kill switch
+
+Two switches that take effect on the next ticket (or the next write) in every worker, with no deploy. They live in the `controls` table (run `uv run --active alembic upgrade head` once), and each change is recorded in the audit log with who made it and why.
+
+| Control | Values | Effect of the second value |
+|---|---|---|
+| `agent` | `on` (default), `off` | New tickets go to a human before any model call or tool. A run already in progress finishes its current step first. |
+| `writes` | `on` (default), `frozen` | A write that would run on its own becomes a request for approval (reason `writes_frozen`), and an approval cannot execute anything. Rejecting still works, and reads are not affected. |
+
+```
+uv run --active python -m kartly.controls status
+uv run --active python -m kartly.controls set writes frozen --by maya --reason "refunds look wrong"
+uv run --active python -m kartly.controls set writes on --by maya
+```
+
+The same through the API: `GET /v1/controls` and `PUT /v1/controls/{name}` with `{"value": "frozen", "reviewer": "maya", "reason": "..."}`. A stored value that is not allowed counts as the safe one (off, frozen). See ADR-051.
+
 ## Claim check
 
 The grounding check cannot see a wrong claim that has no number: "Kartly does not accept returns in physical stores" next to a real chunk about returns passes it. The claim check is a second model call that reads the retrieved text and the reply and lists any statement the text does not support (`guards/claims.py`, judge prompt `j2`). It is off by default. Turn it on with `KARTLY_CLAIM_CHECK_MODEL=NAME`, `--claim-check NAME` on the orchestrator CLI, or `--claim-check NAME` on `python -m kartly.evals`. It runs only on a policy reply that already passed the grounding check, it can only hold a reply (never rewrite one), and a judge that fails or returns something unusable also holds the reply. Its cost is added to the run (about 550 to 700 tokens per policy answer). The judge also sees what the order tools returned, so a reply can state facts about the customer's own order, and a flagged statement that only says "I don't have that information" or "a colleague will follow up" is dropped in code, because a small model flags those despite being told not to. Use a hosted model for the judge: `local_small` held 16 of 17 good replies.
@@ -402,8 +419,8 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 **Week 5: reliability.** Queue workers, retries, fallback chain across models, dead-letter queue, kill switch, replay. Prompt caching or a paid tier for Groq's tokens-per-minute limit.
 
 - [x] 5a: retries with backoff, fallback chain and a circuit breaker per model (`KARTLY_FALLBACK_MODELS`; ADR-050)
-- [ ] 5b: kill switch (stop writes, or stop the agent, without a deploy) and a dead-letter state for tickets that cannot be processed
-- [ ] 5c: queue workers that survive a restart (Redis), and replay of a stored run
+- [x] 5b: kill switch: stop the agent or freeze writes without a deploy (ADR-051)
+- [ ] 5c: queue workers that survive a restart (Redis), a dead-letter state for tickets that cannot be processed, and replay of a stored run
 - [ ] 5d: a reliability test that injects faults (provider down, rate limit, slow responses) and reports what customers would see
 
 **Week 6: observability.** Tracing, metrics, admin UI, shadow pricing, routing experiments.

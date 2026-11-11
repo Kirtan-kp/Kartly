@@ -36,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from kartly.controls import Controls
 from kartly.sanitize import clean_str, safe_json
 from kartly.store.models import (
     Action,
@@ -225,6 +226,7 @@ class ToolGateway:
         clock: Callable[[], datetime] | None = None,
         modes: Mapping[RiskTier, Mode] | None = None,
         approval_ttl: timedelta = APPROVAL_TTL,
+        controls: Controls | None = None,
     ) -> None:
         tool_list = tuple(default_tools() if tools is None else tools)
         names = [tool.name for tool in tool_list]
@@ -235,6 +237,7 @@ class ToolGateway:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._modes = {**DEFAULT_MODES, **(modes or {})}
         self._approval_ttl = approval_ttl
+        self._controls = controls
 
     def mode_for(self, tool: Tool) -> Mode:
         """Reads are always on. A write follows the mode set for its tier (default: shadow)."""
@@ -449,6 +452,11 @@ class ToolGateway:
         if approval.status != ApprovalStatus.PENDING:
             audit("repeat_refused", was=approval.status.value)
             return Decision(False, "already_decided", f"Already {approval.status.value}.")
+        if approve and self._controls is not None and not self._controls.writes_on(session):
+            audit("blocked_writes_frozen")  # the request stays pending; rejecting still works
+            return Decision(
+                False, "refused", "Writes are frozen, so nothing can be approved right now."
+            )
         if now >= utc(approval.expires_at):
             close(ApprovalStatus.EXPIRED)
             action.status = ActionStatus.REJECTED
@@ -567,7 +575,13 @@ class ToolGateway:
         except Exception as exc:
             return self._failed(name, target_id, exc)
 
-        reason = "shadow_mode" if self.mode_for(tool) == Mode.SHADOW else needs
+        mode = self.mode_for(tool)
+        frozen = (
+            mode == Mode.AUTO
+            and self._controls is not None
+            and not self._controls.writes_on(session)
+        )
+        reason = "writes_frozen" if frozen else "shadow_mode" if mode == Mode.SHADOW else needs
         if reason is not None:
             return self._propose(
                 session, ctx, tool, canonical, preview, reason, key, target_id, now

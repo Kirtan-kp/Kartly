@@ -6,6 +6,8 @@
     GET  /v1/approvals          requests for a human (?status=pending|approved|rejected|expired|all)
     GET  /v1/approvals/{id}     one request: what it would do, or what happened
     POST /v1/approvals/{id}/approve | /reject   a human decides (approving runs the action once)
+    GET  /v1/controls           the operator switches (agent on/off, writes on/frozen)
+    PUT  /v1/controls/{name}    flip one, with who and why (audited)
     GET  /healthz               liveness and a database check (no key needed)
 
 Security stance: every /v1 route needs the API key. The ``customer_id`` on a ticket is asserted by
@@ -36,6 +38,10 @@ from kartly.api.schemas import (
     ApprovalDecide,
     ApprovalList,
     ApprovalOut,
+    ControlChanged,
+    ControlList,
+    ControlOut,
+    ControlSet,
     DecisionOut,
     Health,
     MessageOut,
@@ -45,6 +51,7 @@ from kartly.api.schemas import (
     TicketOut,
     TraceOut,
 )
+from kartly.controls import ControlError, Controls, ControlState
 from kartly.gateway import ToolGateway
 from kartly.orchestrator import TicketRunner, UnknownCustomerError, load_trace
 from kartly.sanitize import clean_str
@@ -61,6 +68,7 @@ class ApiState:
     api_key: str
     wait_timeout_s: float = 150.0  # a little over the run's own 120 s limit
     gateway: ToolGateway | None = None  # needed for the approval routes
+    controls: Controls | None = None  # needed for the control routes
 
 
 def _state(request: Request) -> ApiState:
@@ -371,6 +379,44 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         response: Response,
     ) -> DecisionOut:
         return _decide(state, approval_id, body, response, approve=False)
+
+    def _control_out(state: ControlState) -> ControlOut:
+        return ControlOut(
+            name=state.name,
+            value=state.value,
+            allowed=list(state.allowed),
+            reason=state.reason,
+            updated_by=state.updated_by,
+            updated_at=state.updated_at,
+        )
+
+    def _controls(state: ApiState) -> Controls:
+        if state.controls is None:
+            raise HTTPException(status_code=503, detail="controls are not configured")
+        return state.controls
+
+    @app.get(
+        "/v1/controls",
+        response_model=ControlList,
+        dependencies=[Depends(require_api_key)],
+        tags=["controls"],
+    )
+    def list_controls(state: StateDep) -> ControlList:
+        return ControlList(controls=[_control_out(c) for c in _controls(state).all()])
+
+    @app.put(
+        "/v1/controls/{name}",
+        response_model=ControlChanged,
+        dependencies=[Depends(require_api_key)],
+        tags=["controls"],
+    )
+    def set_control(name: str, body: ControlSet, state: StateDep) -> ControlChanged:
+        try:
+            new, changed = _controls(state).set(name, body.value, body.reviewer, body.reason)
+        except ControlError as exc:
+            known = "unknown control" in str(exc)
+            raise HTTPException(status_code=404 if known else 422, detail=str(exc)) from exc
+        return ControlChanged(**_control_out(new).model_dump(), changed=changed)
 
     return app
 

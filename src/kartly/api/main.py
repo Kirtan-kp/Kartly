@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from kartly.api.app import ApiState, create_app
 from kartly.api.executor import BoundedExecutor
 from kartly.config import get_settings, load_env
+from kartly.controls import Controls
 from kartly.gateway import ToolGateway, modes_from_settings
 from kartly.guards.claims import ClaimJudge
 from kartly.llm import LLMConfigError, ModelRegistry, RetryPolicy
@@ -50,10 +51,12 @@ def create_app_from_env() -> FastAPI:
     )
     engine = make_engine()
     factory = make_session_factory(engine)
+    controls = Controls(factory)
     gateway = ToolGateway(
         factory,
         gateway_tools(settings),
         modes=modes_from_settings(settings.tier1_mode, settings.tier2_mode),
+        controls=controls,
     )
     runner = TicketRunner(
         factory,
@@ -62,6 +65,7 @@ def create_app_from_env() -> FastAPI:
         model_tier=model_name,
         router=router,
         claim_judge=ClaimJudge(judge_client) if judge_client is not None else None,
+        controls=controls,
         context_budget=settings.context_budget_tokens,
     )
     state = ApiState(
@@ -70,6 +74,7 @@ def create_app_from_env() -> FastAPI:
         executor=BoundedExecutor(settings.max_workers, settings.max_pending_runs),
         api_key=settings.api_key,
         gateway=gateway,
+        controls=controls,
     )
 
     def cleanup() -> None:
