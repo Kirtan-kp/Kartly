@@ -369,7 +369,7 @@ class _Execution:
         self.tokens_in += response.usage.prompt_tokens
         self.tokens_out += response.usage.completion_tokens
         self.cost += response.cost_usd
-        output = {
+        output: dict[str, Any] = {
             "content": response.content,
             "tool_calls": [
                 {"id": c.id, "name": c.name, "arguments": c.raw_arguments}
@@ -380,6 +380,9 @@ class _Execution:
             "ignored_params": list(response.ignored_params),
             "usage_estimated": response.usage.estimated,
         }
+        if response.attempts > 1 or response.failed_over_from:  # trouble before this reply
+            output["attempts"] = response.attempts
+            output["failed_over_from"] = list(response.failed_over_from)
         self._add(
             StepRecord(
                 idx=len(self.steps),

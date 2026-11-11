@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     default_model: str | None = (
         None  # a name from models.yaml; default: first model of role "small"
     )
+    # Models to try, in order, when the default model keeps failing (comma separated names from
+    # models.yaml, e.g. "groq_large"). The default model is always retried first (ADR-050).
+    fallback_models: str = ""
+    # Calls to one model (the first and its retries) before moving on to the next one.
+    llm_max_attempts: int = 3
+    # A model that fails this many calls in a row is skipped for llm_cooldown_s seconds.
+    llm_failure_threshold: int = 3
+    llm_cooldown_s: float = 30.0
     # A model from models.yaml that labels each ticket (intent, tier) before the resolver runs,
     # sending Tier 3 to a human. Empty means no model router (the rules still run).
     router_model: str | None = None

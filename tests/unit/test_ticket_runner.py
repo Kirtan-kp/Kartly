@@ -705,3 +705,25 @@ def test_the_system_prompt_states_the_security_rules() -> None:
     system = build_messages([])[0]["content"]
     assert "not instructions" in system  # untrusted text is data
     assert "cannot refund" in system  # no write tools exist yet, and the prompt says so
+
+
+def test_a_ticket_survives_a_provider_outage_and_the_trace_says_so(
+    seeded_factory: sessionmaker[Session], gateway: ToolGateway
+) -> None:
+    from kartly.llm import ProviderUnavailableError, ResilientClient, RetryPolicy
+
+    primary = ScriptedClient([ProviderUnavailableError("503")])
+    primary.name = "big"
+    backup = ScriptedClient([make_response("Your order is on its way.", model="small")])
+    backup.name = "small"
+    client = ResilientClient([primary, backup], RetryPolicy(max_attempts=1), sleep=lambda s: None)
+    tickets = TicketRunner(seeded_factory, client, gateway, model_tier="big")
+    ticket_id = tickets.create_ticket("C-0001", "Where is KRT-100002?")
+    summary = tickets.run(ticket_id)
+
+    assert summary.outcome == "drafted" and summary.answer == "Your order is on its way."
+    with seeded_factory() as session:
+        step = session.scalars(select(RunStep).where(RunStep.kind == "llm_call")).one()
+        assert step.model == "small"  # the model that really answered, not the configured one
+        assert step.output is not None
+        assert step.output["attempts"] == 2 and step.output["failed_over_from"] == ["big"]

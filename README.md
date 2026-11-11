@@ -295,6 +295,18 @@ All routes need the `X-API-Key` header.
 
 The reviewer name is asserted by the caller and recorded as `human:<name>` in the audit log, since the API key is shared. When none of a ticket's requests is pending any more, the ticket leaves `awaiting_approval`: `drafted` if every action was carried out, `escalated` if any was rejected, expired, refused or failed, so a person follows up. Two reviewers deciding at once are serialised by a row lock; the second gets `already_decided`. The customer is not notified yet. See ADR-048.
 
+## Reliability: retries, fallback and the circuit breaker
+
+The API wraps the default model in a `ResilientClient`. Set `KARTLY_FALLBACK_MODELS=groq_large` (names from `config/models.yaml`, comma separated) to give it somewhere to go. Per model call:
+
+- rate limited (429): waits as long as `Retry-After` says if that is 15 seconds or less, and otherwise moves to the next model straight away;
+- provider down, timeout, unusable response: waits 0.5, 1, 2 ... seconds (with jitter, at most 8) and retries; after `KARTLY_LLM_MAX_ATTEMPTS` (3) calls it moves on;
+- a model that fails 3 calls in a row is skipped for 30 seconds, then one call is let through to test it;
+- a wrong key, an unknown model or a bad request is raised at once, not hidden by a fallback; an invalid tool call is left to the agent loop, which re-prompts the model;
+- the whole call gives up after 60 seconds, and when no model could answer the ticket ends as an LLM error and goes to a human.
+
+Retrying is safe because a model call changes nothing; tools are never re-run by this layer. The run's trace records the model that really answered, and `attempts` and `failed_over_from` when there was trouble. See ADR-050.
+
 ## Claim check
 
 The grounding check cannot see a wrong claim that has no number: "Kartly does not accept returns in physical stores" next to a real chunk about returns passes it. The claim check is a second model call that reads the retrieved text and the reply and lists any statement the text does not support (`guards/claims.py`, judge prompt `j2`). It is off by default. Turn it on with `KARTLY_CLAIM_CHECK_MODEL=NAME`, `--claim-check NAME` on the orchestrator CLI, or `--claim-check NAME` on `python -m kartly.evals`. It runs only on a policy reply that already passed the grounding check, it can only hold a reply (never rewrite one), and a judge that fails or returns something unusable also holds the reply. Its cost is added to the run (about 550 to 700 tokens per policy answer). The judge also sees what the order tools returned, so a reply can state facts about the customer's own order, and a flagged statement that only says "I don't have that information" or "a colleague will follow up" is dropped in code, because a small model flags those despite being told not to. Use a hosted model for the judge: `local_small` held 16 of 17 good replies.
@@ -322,7 +334,7 @@ kartly-agent/
     api/                 # FastAPI routes, API-key auth, bounded run pool   <- built
     orchestrator/        # bounded loop, run budget, ticket runner, trace  <- built; stages come later
     routing/             # hard rules, classifier, model selection
-    llm/                 # provider adapter, pricing, smoke test  <- built; retries and fallback in Week 5
+    llm/                 # provider adapter, pricing, smoke test, retries and fallback
     context/             # prompts, token budget, thread trimming  <- built; summaries later
     retrieval/           # chunking, BM25, dense, RRF fusion  <- built; reranker next
     gateway/             # Tool Gateway: authz, limits, idempotency, audit   <- built (read and write paths)
@@ -388,6 +400,11 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [x] 4d: write evals (shadow and auto graded on store state) and a red-team set for approval bypass (scripted oracles pass; first model run pending)
 
 **Week 5: reliability.** Queue workers, retries, fallback chain across models, dead-letter queue, kill switch, replay. Prompt caching or a paid tier for Groq's tokens-per-minute limit.
+
+- [x] 5a: retries with backoff, fallback chain and a circuit breaker per model (`KARTLY_FALLBACK_MODELS`; ADR-050)
+- [ ] 5b: kill switch (stop writes, or stop the agent, without a deploy) and a dead-letter state for tickets that cannot be processed
+- [ ] 5c: queue workers that survive a restart (Redis), and replay of a stored run
+- [ ] 5d: a reliability test that injects faults (provider down, rate limit, slow responses) and reports what customers would see
 
 **Week 6: observability.** Tracing, metrics, admin UI, shadow pricing, routing experiments.
 

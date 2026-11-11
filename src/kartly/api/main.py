@@ -16,7 +16,7 @@ from kartly.api.executor import BoundedExecutor
 from kartly.config import get_settings, load_env
 from kartly.gateway import ToolGateway, modes_from_settings
 from kartly.guards.claims import ClaimJudge
-from kartly.llm import LLMConfigError, ModelRegistry
+from kartly.llm import LLMConfigError, ModelRegistry, RetryPolicy
 from kartly.orchestrator import TicketRunner
 from kartly.retrieval import EmbeddingError, KnowledgeBaseError
 from kartly.retrieval.setup import gateway_tools
@@ -34,7 +34,16 @@ def create_app_from_env() -> FastAPI:
         )
     registry = ModelRegistry.from_yaml(settings.models_config_path)
     model_name = settings.default_model or registry.chain("small")[0]
-    client = registry.client(model_name)
+    fallbacks = [n.strip() for n in settings.fallback_models.split(",") if n.strip()]
+    client = registry.resilient(
+        model_name,
+        fallbacks,
+        policy=RetryPolicy(
+            max_attempts=settings.llm_max_attempts,
+            failure_threshold=settings.llm_failure_threshold,
+            cooldown_s=settings.llm_cooldown_s,
+        ),
+    )
     router = registry.client(settings.router_model) if settings.router_model else None
     judge_client = (
         registry.client(settings.claim_check_model) if settings.claim_check_model else None

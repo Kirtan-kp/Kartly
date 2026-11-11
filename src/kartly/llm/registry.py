@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import httpx
@@ -11,6 +11,7 @@ import httpx
 from kartly.llm.client import OpenAICompatClient
 from kartly.llm.config import ModelConfig, ModelsFile, load_models_file
 from kartly.llm.errors import LLMConfigError
+from kartly.llm.resilient import ResilientClient, RetryPolicy
 
 
 class ModelRegistry:
@@ -59,3 +60,16 @@ class ModelRegistry:
                     "(set it in your shell or in .env)"
                 )
         return OpenAICompatClient(name, model, provider, api_key=api_key, http_client=http_client)
+
+    def resilient(
+        self,
+        name: str,
+        fallbacks: Sequence[str] = (),
+        *,
+        policy: RetryPolicy | None = None,
+        http_client: httpx.Client | None = None,
+    ) -> ResilientClient:
+        """``name`` first, then each fallback in order, with retries and a circuit breaker."""
+        names = [name, *(f for f in fallbacks if f != name)]
+        clients = [self.client(n, http_client=http_client) for n in dict.fromkeys(names)]
+        return ResilientClient(clients, policy)

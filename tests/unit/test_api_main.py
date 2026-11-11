@@ -259,3 +259,43 @@ def test_a_claim_check_model_from_the_settings_reaches_the_runner_and_is_closed_
 def test_no_claim_check_unless_configured(wired: Engine, fake_server: FakeOpenAIServer) -> None:
     with TestClient(create_app_from_env()) as http:
         assert http.app.state.kartly.runner._claim_judge is None  # type: ignore[attr-defined]
+
+
+def test_a_down_default_model_falls_back_to_the_next_one_from_the_settings(
+    monkeypatch: pytest.MonkeyPatch, wired: Engine, tmp_path: Path, fake_server: FakeOpenAIServer
+) -> None:
+    from tests.llm_support import completion_payload
+
+    base = write_models_config(tmp_path, fake_server.base_url).read_text()
+    extra = (
+        "  fake_large:\n    provider: fake\n    model: other-id\n"
+        "    price: {input_per_mtok: 1, output_per_mtok: 2}\n"
+    )
+    config = tmp_path / "two.yaml"
+    config.write_text(base.replace("roles:", extra + "roles:"))
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(
+            models_config_path=str(config),
+            api_key=KEY,
+            fallback_models=" fake_large , ",
+            llm_max_attempts=1,
+        ),
+    )
+    fake_server.responder = lambda body: (
+        (503, {"error": {"message": "overloaded"}}, {})
+        if body["model"] == "fake-model-id"
+        else (200, completion_payload("Sorry for the wait, it is on its way."), {})
+    )
+    with TestClient(create_app_from_env()) as http:
+        body = http.post(
+            "/v1/tickets?wait=true",
+            json={"customer_id": "C-0001", "message": "hi"},
+            headers={"X-API-Key": KEY},
+        ).json()
+        trace = http.get(f"/v1/runs/{body['run_id']}/trace", headers={"X-API-Key": KEY}).json()
+    assert body["outcome"] == "drafted" and "on its way" in body["answer"]
+    assert [r["body"]["model"] for r in fake_server.requests] == ["fake-model-id", "other-id"]
+    [call] = [s for s in trace["steps"] if s["kind"] == "llm_call"]
+    assert call["model"] == "fake_large"
+    assert call["output"]["failed_over_from"] == ["fake_small"]

@@ -47,6 +47,8 @@ class ChatResponse:
     latency_ms: int
     ignored_params: tuple[str, ...] = ()  # request options this provider cannot take
     rate_limit: dict[str, str] = field(default_factory=dict)  # x-ratelimit-* response headers
+    attempts: int = 1  # model calls it took to get this reply (more than 1: retries or fallback)
+    failed_over_from: tuple[str, ...] = ()  # models tried and given up on before this one
 
     def assistant_message(self) -> dict[str, Any]:
         """This reply as a chat message, ready to append to the history for the next call."""

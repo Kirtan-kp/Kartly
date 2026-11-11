@@ -15,9 +15,11 @@ from kartly.llm.errors import (
 )
 from kartly.llm.pricing import ModelPrice, compute_cost, estimate_prompt_tokens, estimate_tokens
 from kartly.llm.registry import ModelRegistry
+from kartly.llm.resilient import AllModelsFailedError, ResilientClient, RetryPolicy
 from kartly.llm.types import ChatClient, ChatResponse, ToolCall, Usage
 
 __all__ = [
+    "AllModelsFailedError",
     "AuthenticationError",
     "BadRequestError",
     "ChatClient",
@@ -32,6 +34,8 @@ __all__ = [
     "OpenAICompatClient",
     "ProviderUnavailableError",
     "RateLimitError",
+    "ResilientClient",
+    "RetryPolicy",
     "ToolCall",
     "ToolUseFailedError",
     "Usage",
