@@ -6,29 +6,46 @@ python -m kartly.api            # serves on 127.0.0.1:8000, docs at /docs
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 import uvicorn
 from fastapi import FastAPI
+from sqlalchemy.orm import Session, sessionmaker
 
 from kartly.api.app import ApiState, create_app
 from kartly.api.executor import BoundedExecutor
-from kartly.config import get_settings, load_env
+from kartly.config import Settings, get_settings, load_env
 from kartly.controls import Controls
 from kartly.gateway import ToolGateway, modes_from_settings
 from kartly.guards.claims import ClaimJudge
 from kartly.llm import LLMConfigError, ModelRegistry, RetryPolicy
 from kartly.orchestrator import TicketRunner
+from kartly.queue import JobQueue
 from kartly.retrieval import EmbeddingError, KnowledgeBaseError
 from kartly.retrieval.setup import gateway_tools
 from kartly.store.db import make_engine, make_session_factory
+from kartly.worker import Worker, WorkerPool
 
 
-def create_app_from_env() -> FastAPI:
+@dataclass
+class Runtime:
+    """Everything the API and the workers share, built once from settings."""
+
+    settings: Settings
+    factory: sessionmaker[Session]
+    runner: TicketRunner
+    gateway: ToolGateway
+    controls: Controls
+    queue: JobQueue
+    close: Callable[[], None]
+
+
+def build_runtime(*, require_api_key: bool = False) -> Runtime:
     """Raises LLMConfigError or ValueError with a plain message when setup is incomplete."""
     load_env()
     settings = get_settings()
-    if not settings.api_key:
+    if require_api_key and not settings.api_key:
         raise ValueError(
             "KARTLY_API_KEY is not set. Generate one with "
             'python -c "import secrets; print(secrets.token_urlsafe(32))" and put it in .env'
@@ -68,16 +85,9 @@ def create_app_from_env() -> FastAPI:
         controls=controls,
         context_budget=settings.context_budget_tokens,
     )
-    state = ApiState(
-        session_factory=factory,
-        runner=runner,
-        executor=BoundedExecutor(settings.max_workers, settings.max_pending_runs),
-        api_key=settings.api_key,
-        gateway=gateway,
-        controls=controls,
-    )
+    queue = JobQueue(factory, max_attempts=settings.job_max_attempts, lease_s=settings.job_lease_s)
 
-    def cleanup() -> None:
+    def close() -> None:
         client.close()
         if router is not None:
             router.close()
@@ -85,7 +95,33 @@ def create_app_from_env() -> FastAPI:
             judge_client.close()
         engine.dispose()
 
-    return create_app(state, on_shutdown=cleanup)
+    return Runtime(settings, factory, runner, gateway, controls, queue, close)
+
+
+def create_app_from_env() -> FastAPI:
+    rt = build_runtime(require_api_key=True)
+    settings = rt.settings
+    db_mode = settings.queue_mode == "db"
+    workers = (
+        WorkerPool(
+            [Worker(rt.queue, rt.runner.run, rt.factory) for _ in range(settings.embedded_workers)],
+            settings.worker_poll_s,
+        )
+        if db_mode and settings.embedded_workers > 0
+        else None
+    )
+    state = ApiState(
+        session_factory=rt.factory,
+        runner=rt.runner,
+        executor=BoundedExecutor(settings.max_workers, settings.max_pending_runs),
+        api_key=settings.api_key or "",
+        gateway=rt.gateway,
+        controls=rt.controls,
+        queue=rt.queue if db_mode else None,
+        max_backlog=settings.max_pending_runs,
+        workers=workers,
+    )
+    return create_app(state, on_shutdown=rt.close)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

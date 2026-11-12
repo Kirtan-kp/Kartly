@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     context_budget_tokens: int = 6000
     max_workers: int = 2  # tickets processed at the same time
     max_pending_runs: int = 20  # running + queued; beyond this the API answers 503
+    # Durable queue (ADR-052). "inprocess": the API runs tickets in its own threads (default).
+    # "db": the API writes a job and workers run it; jobs survive a restart and are retried.
+    queue_mode: Literal["inprocess", "db"] = "inprocess"
+    embedded_workers: int = 2  # worker threads started inside the API in db mode (0 = none)
+    job_max_attempts: int = 3
+    job_lease_s: float = 300.0
+    worker_poll_s: float = 1.0
 
 
 @lru_cache

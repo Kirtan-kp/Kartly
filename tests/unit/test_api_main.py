@@ -299,3 +299,43 @@ def test_a_down_default_model_falls_back_to_the_next_one_from_the_settings(
     [call] = [s for s in trace["steps"] if s["kind"] == "llm_call"]
     assert call["model"] == "fake_large"
     assert call["output"]["failed_over_from"] == ["fake_small"]
+
+
+def test_queue_mode_db_turns_tickets_into_jobs_and_a_worker_can_run_them(
+    wired: Engine, fake_server: FakeOpenAIServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from kartly.api.main import build_runtime
+    from kartly.store.models import Job, JobStatus
+    from kartly.worker import Worker
+
+    config = write_models_config(tmp_path, fake_server.base_url)
+    monkeypatch.setattr(
+        "kartly.api.main.get_settings",
+        lambda: make_settings(
+            models_config_path=str(config),
+            api_key=KEY,
+            queue_mode="db",
+            embedded_workers=0,
+            job_max_attempts=2,
+        ),
+    )
+    app = create_app_from_env()
+    with TestClient(app) as http:
+        created = http.post(
+            "/v1/tickets",
+            json={"customer_id": "C-0001", "message": "Where is my order KRT-100001?"},
+            headers={"X-API-Key": KEY},
+        )
+        assert created.status_code == 202
+        factory = sessionmaker(wired)
+        with factory() as session:
+            [job] = session.scalars(select(Job)).all()
+            assert job.status == JobStatus.QUEUED and job.max_attempts == 2
+
+        runtime = build_runtime()  # what `python -m kartly.worker` builds (not closed: the
+        # in-memory test engine is shared and closing would dispose it)
+        assert Worker(runtime.queue, runtime.runner.run, runtime.factory).run_once()
+        with factory() as session:
+            [done] = session.scalars(select(Job)).all()
+            assert done.status == JobStatus.SUCCEEDED and done.result is not None
+            assert done.result["outcome"] == "drafted"

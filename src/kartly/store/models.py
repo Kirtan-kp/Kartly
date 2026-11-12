@@ -24,6 +24,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     Numeric,
@@ -99,6 +100,13 @@ class TicketStatus(enum.StrEnum):
     ESCALATED = "escalated"
     CLOSED = "closed"
     FAILED = "failed"
+
+
+class JobStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    DEAD = "dead"  # gave up: a human has the ticket (the dead-letter queue)
 
 
 class MessageRole(enum.StrEnum):
@@ -446,3 +454,35 @@ class Control(Base):
     reason: Mapped[str | None] = mapped_column(String(300))
     updated_by: Mapped[str] = mapped_column(String(64))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Job(Base):
+    """One unit of background work: run the agent on a ticket (ADR-052).
+
+    A worker claims a job by setting ``locked_by`` and a lease (``locked_until``). A worker that
+    dies leaves an expired lease, and the job is claimed again.
+    """
+
+    __tablename__ = "jobs"
+    __table_args__ = (Index("ix_jobs_claim", "status", "available_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20), default="run_ticket", server_default="run_ticket")
+    status: Mapped[JobStatus] = mapped_column(
+        _enum(JobStatus, "job_status"),
+        default=JobStatus.QUEUED,
+        server_default=JobStatus.QUEUED.value,
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, server_default="3")
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(64))
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE)
+    created_at: Mapped[datetime] = _created_at()
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

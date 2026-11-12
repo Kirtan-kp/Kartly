@@ -42,8 +42,11 @@ from kartly.api.schemas import (
     ControlList,
     ControlOut,
     ControlSet,
+    DeadLetterList,
+    DeadLetterOut,
     DecisionOut,
     Health,
+    JobRequeue,
     MessageOut,
     RunOut,
     TicketCreate,
@@ -54,8 +57,10 @@ from kartly.api.schemas import (
 from kartly.controls import ControlError, Controls, ControlState
 from kartly.gateway import ToolGateway
 from kartly.orchestrator import TicketRunner, UnknownCustomerError, load_trace
+from kartly.queue import JobQueue
 from kartly.sanitize import clean_str
-from kartly.store.models import Action, Approval, ApprovalStatus, Ticket
+from kartly.store.models import Action, Approval, ApprovalStatus, JobStatus, Ticket
+from kartly.worker import WorkerPool
 
 SessionFactory = Callable[[], Session]
 
@@ -69,6 +74,9 @@ class ApiState:
     wait_timeout_s: float = 150.0  # a little over the run's own 120 s limit
     gateway: ToolGateway | None = None  # needed for the approval routes
     controls: Controls | None = None  # needed for the control routes
+    queue: JobQueue | None = None  # set in queue mode: tickets become jobs for workers
+    max_backlog: int = 20  # queue mode: jobs waiting or running before the API answers 503
+    workers: WorkerPool | None = None  # embedded workers, started and stopped with the app
 
 
 def _state(request: Request) -> ApiState:
@@ -105,7 +113,11 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        if state.workers is not None:
+            state.workers.start()
         yield
+        if state.workers is not None:
+            state.workers.stop()
         state.executor.shutdown()  # waits for runs in progress
         if on_shutdown is not None:
             on_shutdown()
@@ -173,13 +185,13 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
                 raise
             return _duplicate(response, state, earlier)
 
+        if state.queue is not None:
+            return _enqueue(state, ticket_id, response, wait)
+
         try:
             future = state.executor.submit(lambda: runner.run(ticket_id))
         except Busy:
-            runner.discard_unstarted_ticket(ticket_id)  # nothing was started; a retry is clean
-            raise HTTPException(
-                status_code=503, detail="busy, try again shortly", headers={"Retry-After": "5"}
-            ) from None
+            raise _busy(runner, ticket_id) from None
 
         if wait:
             try:
@@ -418,7 +430,80 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
             raise HTTPException(status_code=404 if known else 422, detail=str(exc)) from exc
         return ControlChanged(**_control_out(new).model_dump(), changed=changed)
 
+    @app.get(
+        "/v1/dead-letters",
+        response_model=DeadLetterList,
+        dependencies=[Depends(require_api_key)],
+        tags=["queue"],
+    )
+    def dead_letters(state: StateDep) -> DeadLetterList:
+        queue = _queue(state)
+        return DeadLetterList(
+            jobs=[
+                DeadLetterOut(
+                    job_id=j.id,
+                    ticket_id=j.ticket_id,
+                    attempts=j.attempts,
+                    last_error=j.last_error,
+                    died_at=j.finished_at,
+                )
+                for j in queue.dead()
+            ],
+            backlog=queue.depth(),
+        )
+
+    @app.post(
+        "/v1/dead-letters/{job_id}/requeue",
+        dependencies=[Depends(require_api_key)],
+        tags=["queue"],
+        status_code=202,
+    )
+    def requeue_dead(job_id: uuid.UUID, body: JobRequeue, state: StateDep) -> dict[str, str]:
+        if not _queue(state).requeue(job_id, f"human:{body.reviewer}"):
+            raise HTTPException(status_code=404, detail="no dead job with that id")
+        return {"status": "queued"}
+
     return app
+
+
+def _queue(state: ApiState) -> JobQueue:
+    if state.queue is None:
+        raise HTTPException(status_code=404, detail="the job queue is not enabled")
+    return state.queue
+
+
+def _busy(runner: TicketRunner, ticket_id: uuid.UUID) -> HTTPException:
+    runner.discard_unstarted_ticket(ticket_id)  # nothing was started; a retry is clean
+    return HTTPException(
+        status_code=503, detail="busy, try again shortly", headers={"Retry-After": "5"}
+    )
+
+
+def _enqueue(
+    state: ApiState, ticket_id: uuid.UUID, response: Response, wait: bool
+) -> TicketCreated:
+    queue = state.queue
+    assert queue is not None
+    if queue.depth() >= state.max_backlog:
+        raise _busy(state.runner, ticket_id)
+    job_id = queue.enqueue(ticket_id)
+    if not wait:
+        return TicketCreated(ticket_id=ticket_id, status="received")
+    view = queue.wait(job_id, state.wait_timeout_s)
+    if view is None or view.status == JobStatus.QUEUED or view.status == JobStatus.RUNNING:
+        return TicketCreated(ticket_id=ticket_id, status="resolving")
+    response.status_code = 200
+    if view.status == JobStatus.DEAD:
+        return TicketCreated(ticket_id=ticket_id, status="escalated", outcome="escalated")
+    result = view.result or {}
+    return TicketCreated(
+        ticket_id=ticket_id,
+        status=str(result.get("outcome", "drafted")),
+        run_id=uuid.UUID(result["run_id"]) if result.get("run_id") else None,
+        outcome=result.get("outcome"),
+        stop_reason=result.get("stop_reason"),
+        answer=result.get("answer"),
+    )
 
 
 def _duplicate(response: Response, state: ApiState, ticket_id: uuid.UUID) -> TicketCreated:

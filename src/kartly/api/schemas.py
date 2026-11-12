@@ -197,3 +197,22 @@ class ControlList(BaseModel):
 
 class ControlChanged(ControlOut):
     changed: bool
+
+
+class JobRequeue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.@-]+$")
+
+
+class DeadLetterOut(BaseModel):
+    job_id: uuid.UUID
+    ticket_id: uuid.UUID
+    attempts: int
+    last_error: str | None
+    died_at: datetime | None
+
+
+class DeadLetterList(BaseModel):
+    jobs: list[DeadLetterOut]
+    backlog: int  # jobs waiting or running now
