@@ -10,7 +10,7 @@ guarantee is done with one table and short transactions:
   ``FOR UPDATE SKIP LOCKED`` so workers never wait on each other). The claim sets a lease
   (``locked_until``). Only the worker named in ``locked_by`` can finish the job.
 - **Survives a dead worker:** a running job whose lease has passed is claimed again.
-- **Retries with backoff, then a dead-letter state:** a failed job waits 5 s, 10 s, 20 s ... and
+- **Retries with backoff, then a dead-letter state:** a failed job waits 30 s, 60 s, 120 s ... and
   after ``max_attempts`` claims it is ``dead``: the ticket goes to a human (escalated) and the job
   stays listed until someone requeues it. A job that keeps killing its worker is buried the same
   way, so one poison ticket cannot crash-loop the pool.
@@ -34,13 +34,13 @@ from kartly.tools.orders import utc
 
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_LEASE_S = 300.0  # longer than the run's own 120 s limit, so a live run never loses it
-BACKOFF_BASE_S = 5.0
+BACKOFF_BASE_S = 30.0  # not shorter than the model breaker's cooldown (see test_queue)
 BACKOFF_MAX_S = 300.0
 MAX_ERROR_CHARS = 500
 
 
 def backoff_s(attempt: int) -> float:
-    """Seconds to wait before attempt ``attempt + 1``: 5, 10, 20 ... at most 300."""
+    """Seconds to wait before attempt ``attempt + 1``: 30, 60, 120 ... at most 300."""
     return float(min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2 ** max(0, attempt - 1)))
 
 

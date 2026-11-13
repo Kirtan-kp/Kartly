@@ -62,9 +62,16 @@ def audit(factory: sessionmaker[Session], action: str) -> list[AuditLog]:
 
 
 def test_backoff_doubles_from_five_seconds_and_is_capped() -> None:
-    assert [backoff_s(n) for n in (1, 2, 3, 4)] == [5, 10, 20, 40]
-    assert backoff_s(7) == 300 and backoff_s(50) == 300
-    assert backoff_s(0) == 5
+    assert [backoff_s(n) for n in (1, 2, 3, 4)] == [30, 60, 120, 240]
+    assert backoff_s(5) == 300 and backoff_s(50) == 300
+    assert backoff_s(0) == 30
+
+
+def test_the_first_backoff_outlasts_the_model_breakers_cooldown() -> None:
+    """Else a short outage uses up every attempt while the breaker still refuses to try."""
+    from kartly.llm.resilient import RetryPolicy
+
+    assert backoff_s(1) >= RetryPolicy().cooldown_s
 
 
 def test_bad_settings_are_refused(seeded_factory: sessionmaker[Session]) -> None:
@@ -105,8 +112,8 @@ def test_a_job_that_is_not_due_yet_waits(seeded_factory: sessionmaker[Session]) 
     job = q.claim("w1")
     assert job is not None
     assert q.fail(job, "boom") == "retry"
-    assert q.claim("w1") is None  # 5 s of backoff
-    clock.advance(4.9)
+    assert q.claim("w1") is None  # 30 s of backoff
+    clock.advance(29.9)
     assert q.claim("w1") is None
     clock.advance(0.2)
     again = q.claim("w1")

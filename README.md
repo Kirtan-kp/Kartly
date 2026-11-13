@@ -186,7 +186,7 @@ Behaviour worth knowing (ADR-027):
 - **Who the customer is.** `customer_id` is asserted by the caller, the storefront backend that already authenticated the customer. It is stored once and is the only identity a tool call can use; nothing in the message or in the model's output can change it. An unknown customer is `404`.
 - **Retries are safe.** Send your own `external_id` and a repeated request returns the first ticket (`200`, `"duplicate": true`) instead of starting a second run.
 - **Load is bounded.** At most `KARTLY_MAX_WORKERS` (default 2) runs execute at once and `KARTLY_MAX_PENDING_RUNS` (default 20) may be running or waiting. Beyond that the API answers `503` with `Retry-After: 5` and creates nothing.
-- **Optional durable queue.** With `KARTLY_QUEUE_MODE=db` the API writes a job and workers run it, so tickets survive a restart, failed runs are retried (5 s, 10 s, 20 s, up to `KARTLY_JOB_MAX_ATTEMPTS`, default 3) and a job that cannot be done is parked as a *dead letter* with its ticket escalated to a human. The API starts `KARTLY_EMBEDDED_WORKERS` (default 2) threads itself; for separate processes set that to 0 and run `python -m kartly.worker`. `GET /v1/dead-letters` lists parked jobs and `POST /v1/dead-letters/{id}/requeue` (body `{"reviewer": "maya"}`) gives one fresh attempts. A retry is refused (job parked as `unsafe_to_retry`) when an earlier attempt already ran, or queued for approval, an action, so a refund is never repeated. The new table needs `uv run --active alembic upgrade head`.
+- **Optional durable queue.** With `KARTLY_QUEUE_MODE=db` the API writes a job and workers run it, so tickets survive a restart, failed runs are retried (30 s, 60 s, 120 s, up to `KARTLY_JOB_MAX_ATTEMPTS`, default 3) and a job that cannot be done is parked as a *dead letter* with its ticket escalated to a human. The API starts `KARTLY_EMBEDDED_WORKERS` (default 2) threads itself; for separate processes set that to 0 and run `python -m kartly.worker`. `GET /v1/dead-letters` lists parked jobs and `POST /v1/dead-letters/{id}/requeue` (body `{"reviewer": "maya"}`) gives one fresh attempts. A retry is refused (job parked as `unsafe_to_retry`) when an earlier attempt already ran, or queued for approval, an action, so a refund is never repeated. The new table needs `uv run --active alembic upgrade head`.
 - **Bad input is a plain `422`** that names the field and the rule but never repeats what you sent. A message is 1-4,000 characters; unknown fields are rejected.
 - A run that cannot answer is not an error: the ticket is `escalated` and the response says why (`stop_reason`).
 
@@ -297,6 +297,11 @@ All routes need the `X-API-Key` header.
 The reviewer name is asserted by the caller and recorded as `human:<name>` in the audit log, since the API key is shared. When none of a ticket's requests is pending any more, the ticket leaves `awaiting_approval`: `drafted` if every action was carried out, `escalated` if any was rejected, expired, refused or failed, so a person follows up. Two reviewers deciding at once are serialised by a row lock; the second gets `already_decided`. The customer is not notified yet. See ADR-048.
 
 ## Reliability: retries, fallback and the circuit breaker
+
+Two tools show whether this holds up (ADR-053):
+
+- `uv run --active python -m kartly.chaos` breaks the model provider on a schedule (a 503 blip, a short and a long rate limit, timeouts, a slow provider, an outage that recovers, a total outage, a revoked key, a crash right after a refund) and runs the whole stack through each. It prints what the customer would see and fails if a ticket is left stuck, a refund is paid twice, or a ticket is marked drafted without an answer. No model is called and time is simulated, so it takes about a second. `--only name ...` runs some, `--json` prints data.
+- `uv run --active python -m kartly.replay <run_id>` takes a stored run, rebuilds its customer messages in a throwaway database, runs today's code with the run's recorded model replies and says whether the tool calls, outcome and answer are the same. Use it after changing code, to see whether real past tickets would now go differently. It reads your database and writes nothing to it. It does not test the model: the replies are frozen.
 
 The API wraps the default model in a `ResilientClient`. Set `KARTLY_FALLBACK_MODELS=groq_large` (names from `config/models.yaml`, comma separated) to give it somewhere to go. Per model call:
 
@@ -422,8 +427,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [x] 5a: retries with backoff, fallback chain and a circuit breaker per model (`KARTLY_FALLBACK_MODELS`; ADR-050)
 - [x] 5b: kill switch: stop the agent or freeze writes without a deploy (ADR-051)
 - [x] 5c: a database-backed job queue and workers that survive a restart, retries with backoff, and a dead-letter state with requeue (ADR-052)
-- [ ] 5d: a fault-injection test (provider down, rate limited, slow) and replay of a stored run
-- [ ] 5d: a reliability test that injects faults (provider down, rate limit, slow responses) and reports what customers would see
+- [x] 5d: a fault-injection test (`python -m kartly.chaos`) and replay of a stored run (`python -m kartly.replay`; ADR-053)
 
 **Week 6: observability.** Tracing, metrics, admin UI, shadow pricing, routing experiments.
 

@@ -128,8 +128,8 @@ def test_a_crash_is_retried_after_the_backoff(seeded_factory: sessionmaker[Sessi
     assert job.status == JobStatus.QUEUED and "RuntimeError: database hiccup" in (
         job.last_error or ""
     )
-    assert worker.run_once() is False  # backing off
-    clock.advance(6)
+    assert worker.run_once() is False  # backing off (30 s)
+    clock.advance(31)
     assert worker.run_once() is True
     assert status_of(seeded_factory, job_id).status == JobStatus.SUCCEEDED
 
@@ -143,7 +143,7 @@ def test_a_provider_failure_that_ended_the_run_is_retried(
     worker.run_once()
     job = status_of(seeded_factory, job_id)
     assert job.status == JobStatus.QUEUED and (job.last_error or "").startswith("llm_error")
-    clock.advance(6)
+    clock.advance(31)
     worker.run_once()
     assert status_of(seeded_factory, job_id).status == JobStatus.SUCCEEDED
 
@@ -189,7 +189,7 @@ def test_a_retry_is_refused_when_an_earlier_attempt_already_acted(
     job_id = queue.enqueue(t)
     worker.run_once()  # attempt 1 crashes...
     add_action(seeded_factory, t, earlier)  # ...after having acted
-    clock.advance(6)
+    clock.advance(31)
 
     assert worker.run_once() is True
     job = status_of(seeded_factory, job_id)
@@ -207,7 +207,7 @@ def test_a_failed_or_rejected_action_does_not_block_a_retry(
     job_id = queue.enqueue(t)
     worker.run_once()
     add_action(seeded_factory, t, earlier)
-    clock.advance(6)
+    clock.advance(31)
     worker.run_once()
     assert status_of(seeded_factory, job_id).status == JobStatus.SUCCEEDED
 
