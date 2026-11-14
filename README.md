@@ -296,6 +296,10 @@ All routes need the `X-API-Key` header.
 
 The reviewer name is asserted by the caller and recorded as `human:<name>` in the audit log, since the API key is shared. When none of a ticket's requests is pending any more, the ticket leaves `awaiting_approval`: `drafted` if every action was carried out, `escalated` if any was rejected, expired, refused or failed, so a person follows up. Two reviewers deciding at once are serialised by a row lock; the second gets `already_decided`. The customer is not notified yet. See ADR-048.
 
+## Metrics
+
+`GET /v1/metrics?window_s=86400` (JSON) and `GET /metrics?window_s=3600` (Prometheus text) need the API key. They report, for the window: runs by outcome, escalation and failure rates, tokens, shadow cost, run latency (time spent in model and tool calls; median and p95), model calls and errors per model, replies that needed a retry or came from a fallback model, tool calls and errors per tool, write actions by status, approvals pending and the age of the oldest, the job queue (queued, running, dead, age of the oldest waiting job), tickets by status, counts of audit events worth watching (cross-customer access attempts, writes blocked by the freeze, jobs that died, control changes) and the current controls. Every figure is a query over stored rows, so it is the same from the API and from a worker, and it survives a restart. Counts are exact; percentiles use the latest 5,000 runs in the window. Each response carries `X-Request-ID` (yours if it is a plain token up to 64 characters, otherwise a new one), and each request logs one line to the `kartly.access` logger with the method, path (no query string), status and time. See ADR-054.
+
 ## Reliability: retries, fallback and the circuit breaker
 
 Two tools show whether this holds up (ADR-053):
@@ -430,6 +434,11 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [x] 5d: a fault-injection test (`python -m kartly.chaos`) and replay of a stored run (`python -m kartly.replay`; ADR-053)
 
 **Week 6: observability.** Tracing, metrics, admin UI, shadow pricing, routing experiments.
+
+- [x] 6a: metrics from the database (`GET /v1/metrics`, Prometheus `GET /metrics`), a request id on every response and one access-log line per request (ADR-054)
+- [ ] 6b: alerts on those metrics (escalation spike, model error rate, stuck queue, aging approvals) and automatic kill-switch triggers
+- [ ] 6c: admin UI: tickets, traces, approvals, dead letters, controls, with reviewer login
+- [ ] 6d: routing experiments and shadow pricing report
 
 **Week 7: delivery.** CI/CD, Docker image, deployment.
 

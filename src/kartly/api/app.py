@@ -19,6 +19,9 @@ change it. Ticket text is data, never instructions.
 from __future__ import annotations
 
 import hmac
+import logging
+import re
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -28,7 +31,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
@@ -56,6 +59,7 @@ from kartly.api.schemas import (
 )
 from kartly.controls import ControlError, Controls, ControlState
 from kartly.gateway import ToolGateway
+from kartly.metrics import collect, to_prometheus
 from kartly.orchestrator import TicketRunner, UnknownCustomerError, load_trace
 from kartly.queue import JobQueue
 from kartly.sanitize import clean_str
@@ -86,6 +90,10 @@ def _state(request: Request) -> ApiState:
 
 
 StateDep = Annotated[ApiState, Depends(_state)]
+
+
+access_log = logging.getLogger("kartly.access")
+_REQUEST_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
 def require_api_key(state: StateDep, x_api_key: Annotated[str | None, Header()] = None) -> None:
@@ -125,6 +133,29 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     app = FastAPI(title="Kartly Support Agent", version="0.1.0", lifespan=lifespan)
     app.state.kartly = state
 
+    @app.middleware("http")
+    async def request_id_and_access_log(request: Request, call_next: Any) -> Response:
+        """Every response carries ``X-Request-ID`` (the caller's, if it is a plain token, else a
+        new one) and every request leaves one log line, so a customer report can be traced."""
+        supplied = request.headers.get("x-request-id", "")
+        request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex
+        started = time.perf_counter()
+        status = 500
+        try:
+            response: Response = await call_next(request)
+            status = response.status_code
+            response.headers["X-Request-ID"] = request_id
+            return response
+        finally:
+            access_log.info(
+                "%s %s -> %d in %d ms request_id=%s",
+                request.method,
+                request.url.path,
+                status,
+                (time.perf_counter() - started) * 1000,
+                request_id,
+            )
+
     @app.exception_handler(RequestValidationError)
     def invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
         """422 that names the field and the rule but never echoes the input back: the default
@@ -141,6 +172,28 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
             for e in exc.errors()
         ]
         return JSONResponse(status_code=422, content={"detail": problems})
+
+    @app.get("/v1/metrics", dependencies=[Depends(require_api_key)], tags=["ops"])
+    def metrics_json(
+        state: StateDep,
+        window_s: Annotated[float, Query(gt=0, le=90 * 86400)] = 86400.0,
+    ) -> dict[str, Any]:
+        return collect(state.session_factory, window_s=window_s, controls=state.controls)
+
+    @app.get(
+        "/metrics",
+        response_class=PlainTextResponse,
+        dependencies=[Depends(require_api_key)],
+        tags=["ops"],
+    )
+    def metrics_prometheus(
+        state: StateDep,
+        window_s: Annotated[float, Query(gt=0, le=90 * 86400)] = 3600.0,
+    ) -> PlainTextResponse:
+        body = to_prometheus(
+            collect(state.session_factory, window_s=window_s, controls=state.controls)
+        )
+        return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
     @app.get("/healthz", response_model=Health, tags=["ops"])
     def healthz(response: Response, db: DbDep) -> Health:

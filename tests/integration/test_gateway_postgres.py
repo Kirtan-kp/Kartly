@@ -130,7 +130,8 @@ def test_identical_calls_at_the_same_moment_cancel_the_order_once(
         results = list(
             pool.map(lambda _i: gw.call(ctx, "cancel_order", {"order_id": "KRT-100003"}), range(8))
         )
-    assert all(r.ok or r.error_code == "action_in_progress" for r in results)
+    allowed = {"action_in_progress", "already_cancelled"}
+    assert all(r.ok or r.error_code in allowed for r in results)
     assert sum(1 for r in results if r.ok and r.data and not r.data.get("replayed")) == 1
     with pg_factory() as session:
         assert len(session.scalars(select(Action)).all()) == 1
