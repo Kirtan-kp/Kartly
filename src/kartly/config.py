@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     job_max_attempts: int = 3
     job_lease_s: float = 300.0
     worker_poll_s: float = 1.0
+    # Alerts (ADR-055). Rules run over the metrics every ``alert_interval_s`` seconds.
+    alerts_enabled: bool = True
+    alert_interval_s: float = 60.0
+    alert_window_s: float = 900.0
+    # Off by default: when on, a critical alert may freeze writes or switch the agent off.
+    alert_auto_actions: bool = False
+    alert_webhook_url: str | None = None  # an https URL that accepts {"text": "..."}
 
 
 @lru_cache

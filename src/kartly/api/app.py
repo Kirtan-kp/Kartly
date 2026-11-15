@@ -36,8 +36,12 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
+from kartly.alerts import AlertLoop, AlertManager
 from kartly.api.executor import Busy, RunExecutor
 from kartly.api.schemas import (
+    AlertCheckOut,
+    AlertList,
+    AlertOut,
     ApprovalDecide,
     ApprovalList,
     ApprovalOut,
@@ -81,6 +85,8 @@ class ApiState:
     queue: JobQueue | None = None  # set in queue mode: tickets become jobs for workers
     max_backlog: int = 20  # queue mode: jobs waiting or running before the API answers 503
     workers: WorkerPool | None = None  # embedded workers, started and stopped with the app
+    alerts: AlertManager | None = None
+    alert_loop: AlertLoop | None = None  # checks the alert rules on a timer
 
 
 def _state(request: Request) -> ApiState:
@@ -123,7 +129,11 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if state.workers is not None:
             state.workers.start()
+        if state.alert_loop is not None:
+            state.alert_loop.start()
         yield
+        if state.alert_loop is not None:
+            state.alert_loop.stop()
         if state.workers is not None:
             state.workers.stop()
         state.executor.shutdown()  # waits for runs in progress
@@ -194,6 +204,39 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
             collect(state.session_factory, window_s=window_s, controls=state.controls)
         )
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
+
+    def _alerts(state: ApiState) -> AlertManager:
+        if state.alerts is None:
+            raise HTTPException(status_code=503, detail="alerts are not configured")
+        return state.alerts
+
+    @app.get(
+        "/v1/alerts",
+        response_model=AlertList,
+        dependencies=[Depends(require_api_key)],
+        tags=["ops"],
+    )
+    def list_alerts(state: StateDep) -> AlertList:
+        return AlertList(
+            alerts=[
+                AlertOut(**{k: getattr(a, k) for k in AlertOut.model_fields})
+                for a in _alerts(state).states()
+            ]
+        )
+
+    @app.post(
+        "/v1/alerts/check",
+        response_model=AlertCheckOut,
+        dependencies=[Depends(require_api_key)],
+        tags=["ops"],
+    )
+    def check_alerts(state: StateDep) -> AlertCheckOut:
+        result = _alerts(state).check()
+        return AlertCheckOut(
+            firing=[f.rule for f in result.firing],
+            fired=[a.rule for a in result.fired],
+            cleared=[a.rule for a in result.cleared],
+        )
 
     @app.get("/healthz", response_model=Health, tags=["ops"])
     def healthz(response: Response, db: DbDep) -> Health:

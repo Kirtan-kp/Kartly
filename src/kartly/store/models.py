@@ -456,6 +456,20 @@ class Control(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class AlertState(Base):
+    """Where each alert rule stands now, so a rule that stays bad is announced once (ADR-055)."""
+
+    __tablename__ = "alert_states"
+
+    name: Mapped[str] = mapped_column(String(60), primary_key=True)
+    status: Mapped[str] = mapped_column(String(10))  # firing | ok
+    severity: Mapped[str] = mapped_column(String(10))  # warning | critical
+    message: Mapped[str] = mapped_column(String(300))
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE)
+    since: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # when it last changed
+    last_checked: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Job(Base):
     """One unit of background work: run the agent on a ticket (ADR-052).
 

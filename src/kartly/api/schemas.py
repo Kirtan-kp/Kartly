@@ -216,3 +216,23 @@ class DeadLetterOut(BaseModel):
 class DeadLetterList(BaseModel):
     jobs: list[DeadLetterOut]
     backlog: int  # jobs waiting or running now
+
+
+class AlertOut(BaseModel):
+    name: str
+    status: str  # firing | ok
+    severity: str  # warning | critical
+    message: str
+    details: dict[str, Any] | None
+    since: datetime
+    last_checked: datetime
+
+
+class AlertList(BaseModel):
+    alerts: list[AlertOut]
+
+
+class AlertCheckOut(BaseModel):
+    firing: list[str]  # rule names
+    fired: list[str]  # newly announced
+    cleared: list[str]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -11,9 +12,21 @@ from kartly.sanitize import MAX_DEPTH, MAX_KEYS, MAX_LIST, MAX_STR, clean_str, s
 
 def test_long_strings_are_truncated() -> None:
     cleaned = clean_str("x" * 10_000)
-    assert len(cleaned) == MAX_STR + 1
+    assert len(cleaned) == MAX_STR
     assert cleaned.endswith("…")
     assert clean_str("short") == "short"
+
+
+@pytest.mark.parametrize("limit", [0, 1, 2, 5, 64, 300])
+def test_the_result_always_fits_the_limit_so_a_bounded_column_cannot_overflow(limit: int) -> None:
+    for text in ("x" * 1000, "é" * 1000, "x" * limit, "x" * (limit + 1), ""):
+        assert len(clean_str(text, limit)) <= limit
+
+
+def test_text_that_exactly_fits_is_kept_whole_and_one_more_character_is_cut() -> None:
+    assert clean_str("abcde", 5) == "abcde"
+    assert clean_str("abcdef", 5) == "abcd…"
+    assert clean_str("abc", 0) == ""
 
 
 def test_nul_and_lone_surrogates_are_removed() -> None:
@@ -76,7 +89,7 @@ def test_trace_limits_keep_far_more_than_audit_limits() -> None:
     from kartly.sanitize import TRACE_LIMITS
 
     long_text = "x" * 3000
-    assert len(safe_json(long_text)) == 201  # audit default: 200 characters plus an ellipsis
+    assert len(safe_json(long_text)) == 200  # audit default: 200 characters, ellipsis included
     assert safe_json(long_text, TRACE_LIMITS) == long_text
     assert len(safe_json(list(range(100)))) == 10
     assert len(safe_json(list(range(100)), TRACE_LIMITS)) == 50

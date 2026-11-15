@@ -25,7 +25,8 @@ KEY = "env-api-key-123456"
 
 def make_settings(**values: object) -> Settings:
     """Settings that ignore the real .env file and environment file lookups."""
-    return Settings(_env_file=None, **values)  # type: ignore[call-arg,arg-type]
+    # alerts_enabled off by default: its timer thread would share the in-memory test database
+    return Settings(_env_file=None, **{"alerts_enabled": False, **values})  # type: ignore[call-arg,arg-type]
 
 
 @pytest.fixture(autouse=True)

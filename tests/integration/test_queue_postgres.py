@@ -64,3 +64,26 @@ def test_a_lease_that_ran_out_is_reclaimed_by_exactly_one_worker(
         got = list(pool.map(lambda n: later.claim(f"w{n}"), range(6)))
     winners = [g for g in got if g is not None]
     assert len(winners) == 1 and winners[0].attempts == 2
+
+
+def test_long_error_texts_fit_their_columns_on_postgres(pg_factory: sessionmaker[Session]) -> None:
+    """A cut text ends in an ellipsis; it must still fit String(500) and String(300)."""
+    from kartly.controls import Controls
+    from kartly.store.models import Job
+
+    with pg_factory() as session:
+        ticket = Ticket(customer_id="C-0001")
+        session.add(ticket)
+        session.commit()
+        ticket_id = ticket.id
+    queue = JobQueue(pg_factory, max_attempts=1)
+    job_id = queue.enqueue(ticket_id)
+    job = queue.claim("w")
+    assert job is not None
+    assert queue.fail(job, "e" * 5000) == "dead"
+    with pg_factory() as session:
+        row = session.get(Job, job_id)
+        assert row is not None and row.last_error is not None and len(row.last_error) == 500
+    state, _ = Controls(pg_factory).set("writes", "frozen", "a" * 200, "r" * 2000)
+    assert state.reason is not None and len(state.reason) == 300
+    assert state.updated_by is not None and len(state.updated_by) == 64

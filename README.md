@@ -300,6 +300,14 @@ The reviewer name is asserted by the caller and recorded as `human:<name>` in th
 
 `GET /v1/metrics?window_s=86400` (JSON) and `GET /metrics?window_s=3600` (Prometheus text) need the API key. They report, for the window: runs by outcome, escalation and failure rates, tokens, shadow cost, run latency (time spent in model and tool calls; median and p95), model calls and errors per model, replies that needed a retry or came from a fallback model, tool calls and errors per tool, write actions by status, approvals pending and the age of the oldest, the job queue (queued, running, dead, age of the oldest waiting job), tickets by status, counts of audit events worth watching (cross-customer access attempts, writes blocked by the freeze, jobs that died, control changes) and the current controls. Every figure is a query over stored rows, so it is the same from the API and from a worker, and it survives a restart. Counts are exact; percentiles use the latest 5,000 runs in the window. Each response carries `X-Request-ID` (yours if it is a plain token up to 64 characters, otherwise a new one), and each request logs one line to the `kartly.access` logger with the method, path (no query string), status and time. See ADR-054.
 
+## Alerts
+
+Every `KARTLY_ALERT_INTERVAL_S` (60) seconds the API checks rules over the last `KARTLY_ALERT_WINDOW_S` (900) seconds of metrics. Rules (thresholds are in `kartly.alerts.Thresholds`; rates need a minimum number of events so two failures out of three do not look like an outage): escalation above 50% of 10+ runs; run failures above 10% (warning) or above 50% of 20+ runs (critical); model errors above 30% (warning) or 80% (critical) of 10+ calls; more than half of replies from a fallback model; a tool failing over 30% of 10+ calls; the oldest queued job older than 5 min (warning) or 30 min (critical); any dead letter; an approval older than an hour; three or more attempts to reach another customer's order; five or more failed write actions.
+
+A rule is announced when it starts firing (or gets worse) and again when it clears, not on every check. Announcements go to the `kartly.alerts` log (errors for critical) and, if `KARTLY_ALERT_WEBHOOK_URL` is an https URL, to that webhook as `{"text": ...}`. `GET /v1/alerts` lists each rule's stored state; `POST /v1/alerts/check` checks now; `uv run --active python -m kartly.alerts` checks from the command line and exits 1 if anything is firing (handy for cron). Each change is in the audit log as `alert.fired` or `alert.cleared`.
+
+**Automatic actions are off.** With `KARTLY_ALERT_AUTO_ACTIONS=true`, a *critical* alert may act: cross-customer access and failed writes freeze writes, and a failure rate above 50% switches the agent off (tickets then go to people). They are done as `system:alerts` with the reason recorded, never override a switch a person already set the same way, and are never lifted automatically: a person turns them back on with `python -m kartly.controls` or `PUT /v1/controls/{name}`. With them off, the alert says what it would have done. The alert state needs `uv run --active alembic upgrade head`.
+
 ## Reliability: retries, fallback and the circuit breaker
 
 Two tools show whether this holds up (ADR-053):
@@ -436,7 +444,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 **Week 6: observability.** Tracing, metrics, admin UI, shadow pricing, routing experiments.
 
 - [x] 6a: metrics from the database (`GET /v1/metrics`, Prometheus `GET /metrics`), a request id on every response and one access-log line per request (ADR-054)
-- [ ] 6b: alerts on those metrics (escalation spike, model error rate, stuck queue, aging approvals) and automatic kill-switch triggers
+- [x] 6b: alerts on those metrics (escalation spike, model errors, failing tools, stuck queue, dead letters, aging approvals, cross-customer access, failed writes), announced once per change, with optional automatic kill-switch actions (ADR-055)
 - [ ] 6c: admin UI: tickets, traces, approvals, dead letters, controls, with reviewer login
 - [ ] 6d: routing experiments and shadow pricing report
 

@@ -104,7 +104,7 @@ def test_the_number_of_results_is_capped(seeded_factory: sessionmaker[Session]) 
 def test_long_text_is_truncated(seeded_factory: sessionmaker[Session]) -> None:
     gateway, _ = gateway_with(seeded_factory, [Hit(chunk("a", "x" * 5000), 0.9)])
     text = search(gateway)["results"][0]["text"]
-    assert len(text) == MAX_TEXT_CHARS + 1 and text.endswith("…")  # the ellipsis marks the cut
+    assert len(text) == MAX_TEXT_CHARS and text.endswith("…")  # the ellipsis marks the cut
 
 
 @pytest.mark.parametrize(

@@ -35,10 +35,13 @@ TRACE_LIMITS = Limits(max_str=4000, max_keys=40, max_list=50, max_depth=6)
 
 
 def clean_str(value: str, limit: int = MAX_STR) -> str:
-    """Truncate to ``limit`` characters and drop characters Postgres or UTF-8 cannot store."""
-    truncated = len(value) > limit
-    cleaned = value[:limit].encode("utf-8", "replace").decode("utf-8").replace("\x00", "")
-    return cleaned + "…" if truncated else cleaned
+    """Fit ``value`` into ``limit`` characters (the ellipsis that marks a cut is counted) and drop
+    characters Postgres or UTF-8 cannot store. The result is safe for a ``String(limit)`` column."""
+    if limit <= 0:
+        return ""
+    if len(value) > limit:
+        value = value[: limit - 1] + "…"
+    return value.encode("utf-8", "replace").decode("utf-8").replace("\x00", "")
 
 
 def safe_json(value: Any, limits: Limits = AUDIT_LIMITS, _depth: int = 0) -> Any:

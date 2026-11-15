@@ -13,6 +13,7 @@ import uvicorn
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from kartly.alerts import AlertLoop, AlertManager, combined, log_notifier, webhook_notifier
 from kartly.api.app import ApiState, create_app
 from kartly.api.executor import BoundedExecutor
 from kartly.config import Settings, get_settings, load_env
@@ -110,6 +111,24 @@ def create_app_from_env() -> FastAPI:
         if db_mode and settings.embedded_workers > 0
         else None
     )
+    manager = (
+        AlertManager(
+            rt.factory,
+            controls=rt.controls,
+            notifier=combined(
+                log_notifier,
+                *(
+                    [webhook_notifier(settings.alert_webhook_url)]
+                    if settings.alert_webhook_url
+                    else []
+                ),
+            ),
+            auto_actions=settings.alert_auto_actions,
+            window_s=settings.alert_window_s,
+        )
+        if settings.alerts_enabled
+        else None
+    )
     state = ApiState(
         session_factory=rt.factory,
         runner=rt.runner,
@@ -120,6 +139,8 @@ def create_app_from_env() -> FastAPI:
         queue=rt.queue if db_mode else None,
         max_backlog=settings.max_pending_runs,
         workers=workers,
+        alerts=manager,
+        alert_loop=AlertLoop(manager, settings.alert_interval_s) if manager else None,
     )
     return create_app(state, on_shutdown=rt.close)
 
