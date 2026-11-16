@@ -34,6 +34,7 @@ from sqlalchemy import (
     Uuid,
     false,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -468,6 +469,38 @@ class AlertState(Base):
     details: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE)
     since: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # when it last changed
     last_checked: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Reviewer(Base):
+    """A person who may use the admin interface (ADR-056). Passwords are stored as scrypt hashes."""
+
+    __tablename__ = "reviewers"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(String(32), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(200))
+    role: Mapped[str] = mapped_column(String(10), default="reviewer", server_default="reviewer")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created_at()
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdminSession(Base):
+    """A signed-in browser. Only the SHA-256 of the cookie value is stored, so a copy of the
+    database cannot be used to sign in."""
+
+    __tablename__ = "admin_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    reviewer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reviewers.id", ondelete="CASCADE"), index=True
+    )
+    csrf: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Job(Base):

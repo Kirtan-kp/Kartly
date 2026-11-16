@@ -325,6 +325,19 @@ The API wraps the default model in a `ResilientClient`. Set `KARTLY_FALLBACK_MOD
 
 Retrying is safe because a model call changes nothing; tools are never re-run by this layer. The run's trace records the model that really answered, and `attempts` and `failed_over_from` when there was trouble. See ADR-050.
 
+## Admin sign-in
+
+People (not services) sign in with an account instead of the shared API key. Create the first admin on the server, after `uv run --active alembic upgrade head`:
+
+```
+uv run --active python -m kartly.reviewers add maya --role admin     # asks for the password
+uv run --active python -m kartly.reviewers list | passwd | disable | enable | unlock NAME
+```
+
+`POST /v1/admin/login` with `{"username", "password"}` sets an HttpOnly, SameSite=Strict cookie and returns a CSRF token. Send that token as `X-CSRF-Token` on every change (approve, reject, controls, requeue, accounts); reads need only the cookie. The API key still works everywhere it did, so scripts are unaffected; the difference is that a session is recorded under its own name (the `reviewer` field is ignored) while the key must still say who is acting.
+
+Passwords are 12 to 200 characters and stored with scrypt. A session lasts 12 hours at most and ends after 2 hours idle (`KARTLY_SESSION_TTL_S`, `KARTLY_SESSION_IDLE_S`); only a hash of the cookie is stored. Five wrong passwords lock the account for 15 minutes; every failure gives the same answer. Set `KARTLY_COOKIE_SECURE=true` behind https. Roles: a **reviewer** can read, decide approvals, requeue dead letters and stop things (freeze writes, switch the agent off); an **admin** can also turn those back on and manage accounts (`/v1/admin/reviewers`). The last active admin cannot be disabled. `GET /v1/tickets` lists tickets (filters `status`, `customer_id`; `before` cursor). See ADR-056.
+
 ## Kill switch
 
 Two switches that take effect on the next ticket (or the next write) in every worker, with no deploy. They live in the `controls` table (run `uv run --active alembic upgrade head` once), and each change is recorded in the audit log with who made it and why.
@@ -445,8 +458,9 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 
 - [x] 6a: metrics from the database (`GET /v1/metrics`, Prometheus `GET /metrics`), a request id on every response and one access-log line per request (ADR-054)
 - [x] 6b: alerts on those metrics (escalation spike, model errors, failing tools, stuck queue, dead letters, aging approvals, cross-customer access, failed writes), announced once per change, with optional automatic kill-switch actions (ADR-055)
-- [ ] 6c: admin UI: tickets, traces, approvals, dead letters, controls, with reviewer login
-- [ ] 6d: routing experiments and shadow pricing report
+- [x] 6c: reviewer accounts, cookie sign-in with CSRF protection and roles, account management API, ticket list (ADR-056)
+- [ ] 6d: admin UI page: tickets, traces, approvals, dead letters, alerts, controls
+- [ ] 6e: routing experiments and shadow pricing report
 
 **Week 7: delivery.** CI/CD, Docker image, deployment.
 

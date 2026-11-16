@@ -25,6 +25,7 @@ from kartly.orchestrator import TicketRunner
 from kartly.queue import JobQueue
 from kartly.retrieval import EmbeddingError, KnowledgeBaseError
 from kartly.retrieval.setup import gateway_tools
+from kartly.reviewers import Reviewers
 from kartly.store.db import make_engine, make_session_factory
 from kartly.worker import Worker, WorkerPool
 
@@ -140,6 +141,13 @@ def create_app_from_env() -> FastAPI:
         max_backlog=settings.max_pending_runs,
         workers=workers,
         alerts=manager,
+        reviewers=Reviewers(
+            rt.factory,
+            session_ttl_s=settings.session_ttl_s,
+            session_idle_s=settings.session_idle_s,
+        ),
+        cookie_secure=settings.cookie_secure,
+        session_ttl_s=settings.session_ttl_s,
         alert_loop=AlertLoop(manager, settings.alert_interval_s) if manager else None,
     )
     return create_app(state, on_shutdown=rt.close)

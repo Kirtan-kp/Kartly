@@ -120,7 +120,9 @@ def test_every_v1_route_needs_the_key(
     http, client = api
     response = http.request(method, path, headers=headers, json=BODY if method == "post" else None)
     assert response.status_code == 401
-    assert response.json() == {"detail": "invalid or missing API key"}  # same for missing and wrong
+    assert response.json() == {
+        "detail": "invalid or missing credentials"
+    }  # same for missing and wrong
     assert response.headers["www-authenticate"] == "ApiKey"
     assert client.calls == []
 

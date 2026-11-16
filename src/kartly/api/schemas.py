@@ -132,13 +132,17 @@ class Health(BaseModel):
     status: str
 
 
+_NAME = r"^[A-Za-z0-9_.@-]+$"
+
+
 class ApprovalDecide(BaseModel):
-    """Who is deciding and, optionally, why. The API key is shared, so the reviewer name is
-    asserted by the caller (the admin tool that authenticated the person) and recorded as is."""
+    """Why, and (with the shared API key only) who. A signed-in reviewer is identified by their
+    session and cannot name someone else; the API key is shared, so a caller using it asserts the
+    reviewer name, which is recorded as is."""
 
     model_config = ConfigDict(extra="forbid")
 
-    reviewer: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.@-]+$")
+    reviewer: str | None = Field(default=None, min_length=1, max_length=64, pattern=_NAME)
     note: str | None = Field(default=None, max_length=500)
 
 
@@ -178,7 +182,7 @@ class ControlSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     value: str = Field(min_length=1, max_length=20)
-    reviewer: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.@-]+$")
+    reviewer: str | None = Field(default=None, min_length=1, max_length=64, pattern=_NAME)
     reason: str | None = Field(default=None, max_length=300)
 
 
@@ -202,7 +206,7 @@ class ControlChanged(ControlOut):
 class JobRequeue(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    reviewer: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.@-]+$")
+    reviewer: str | None = Field(default=None, min_length=1, max_length=64, pattern=_NAME)
 
 
 class DeadLetterOut(BaseModel):
@@ -236,3 +240,62 @@ class AlertCheckOut(BaseModel):
     firing: list[str]  # rule names
     fired: list[str]  # newly announced
     cleared: list[str]
+
+
+class LoginBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class MeOut(BaseModel):
+    username: str
+    role: str
+    csrf: str  # send as the X-CSRF-Token header on every change
+
+
+class ReviewerOut(BaseModel):
+    username: str
+    role: str
+    active: bool
+    locked: bool
+    created_at: datetime
+    last_login_at: datetime | None
+
+
+class ReviewerList(BaseModel):
+    reviewers: list[ReviewerOut]
+
+
+class ReviewerCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=200)
+    role: Literal["reviewer", "admin"] = "reviewer"
+
+
+class PasswordSet(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=1, max_length=200)
+
+
+class ActiveSet(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool
+
+
+class TicketSummary(BaseModel):
+    id: uuid.UUID
+    customer_id: str
+    status: str
+    created_at: datetime
+    last_run_outcome: str | None
+
+
+class TicketList(BaseModel):
+    tickets: list[TicketSummary]
+    next_before: str | None  # pass as ?before= for the next page; null at the end

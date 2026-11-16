@@ -27,18 +27,20 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from kartly.alerts import AlertLoop, AlertManager
 from kartly.api.executor import Busy, RunExecutor
 from kartly.api.schemas import (
+    ActiveSet,
     AlertCheckOut,
     AlertList,
     AlertOut,
@@ -54,11 +56,19 @@ from kartly.api.schemas import (
     DecisionOut,
     Health,
     JobRequeue,
+    LoginBody,
+    MeOut,
     MessageOut,
+    PasswordSet,
+    ReviewerCreate,
+    ReviewerList,
+    ReviewerOut,
     RunOut,
     TicketCreate,
     TicketCreated,
+    TicketList,
     TicketOut,
+    TicketSummary,
     TraceOut,
 )
 from kartly.controls import ControlError, Controls, ControlState
@@ -66,8 +76,23 @@ from kartly.gateway import ToolGateway
 from kartly.metrics import collect, to_prometheus
 from kartly.orchestrator import TicketRunner, UnknownCustomerError, load_trace
 from kartly.queue import JobQueue
+from kartly.reviewers import (
+    AuthError,
+    ReviewerError,
+    ReviewerNotFoundError,
+    Reviewers,
+    ReviewerView,
+)
 from kartly.sanitize import clean_str
-from kartly.store.models import Action, Approval, ApprovalStatus, JobStatus, Ticket
+from kartly.store.models import (
+    Action,
+    Approval,
+    ApprovalStatus,
+    JobStatus,
+    Run,
+    Ticket,
+    TicketStatus,
+)
 from kartly.worker import WorkerPool
 
 SessionFactory = Callable[[], Session]
@@ -87,6 +112,9 @@ class ApiState:
     workers: WorkerPool | None = None  # embedded workers, started and stopped with the app
     alerts: AlertManager | None = None
     alert_loop: AlertLoop | None = None  # checks the alert rules on a timer
+    reviewers: Reviewers | None = None  # admin accounts and sessions
+    cookie_secure: bool = False  # mark the session cookie Secure (https only)
+    session_ttl_s: float = 12 * 3600.0
 
 
 def _state(request: Request) -> ApiState:
@@ -96,6 +124,91 @@ def _state(request: Request) -> ApiState:
 
 
 StateDep = Annotated[ApiState, Depends(_state)]
+
+
+SESSION_COOKIE = "kartly_session"
+# A reviewer may stop things; only an admin (or the service API key) may start them again.
+_SAFE_VALUES = {"agent": {"off"}, "writes": {"frozen"}}
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Who is calling: the shared API key (a service), or a signed-in reviewer or admin."""
+
+    name: str
+    role: str  # "service" | "reviewer" | "admin"
+    via: str  # "key" | "session"
+    csrf: str | None = None
+
+
+def _authenticate(state: ApiState, x_api_key: str | None, cookie: str | None) -> Principal | None:
+    if x_api_key is not None:  # a key was offered: it must be right; a cookie never rescues it
+        if x_api_key and hmac.compare_digest(x_api_key.encode(), state.api_key.encode()):
+            return Principal("api-key", "service", "key")
+        return None
+    if state.reviewers is None:
+        return None
+    info = state.reviewers.resolve(cookie)
+    if info is None:
+        return None
+    return Principal(info.reviewer.username, info.reviewer.role, "session", info.csrf)
+
+
+def _unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="invalid or missing credentials",
+        headers={"WWW-Authenticate": "ApiKey"},
+    )
+
+
+def read_access(
+    state: StateDep,
+    x_api_key: Annotated[str | None, Header()] = None,
+    session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+) -> Principal:
+    principal = _authenticate(state, x_api_key, session)
+    if principal is None:
+        raise _unauthorized()
+    return principal
+
+
+def write_access(
+    principal: Annotated[Principal, Depends(read_access)],
+    x_csrf_token: Annotated[str | None, Header()] = None,
+) -> Principal:
+    """Like read access, and a browser session must also prove the request came from our page."""
+    if principal.via == "session" and not (
+        x_csrf_token
+        and principal.csrf
+        and hmac.compare_digest(x_csrf_token.encode(), principal.csrf.encode())
+    ):
+        raise HTTPException(status_code=403, detail="missing or wrong X-CSRF-Token")
+    return principal
+
+
+def admin_access(principal: Annotated[Principal, Depends(write_access)]) -> Principal:
+    if principal.via != "session" or principal.role != "admin":
+        raise HTTPException(status_code=403, detail="this needs a signed-in admin")
+    return principal
+
+
+def admin_read_access(principal: Annotated[Principal, Depends(read_access)]) -> Principal:
+    if principal.via != "session" or principal.role != "admin":
+        raise HTTPException(status_code=403, detail="this needs a signed-in admin")
+    return principal
+
+
+WriteDep = Annotated[Principal, Depends(write_access)]
+
+
+def _actor_name(principal: Principal, supplied: str | None) -> str:
+    """Who to record. A session decides for itself; the shared key must say who is acting."""
+    if principal.via == "session":
+        return principal.name
+    if not supplied:
+        raise HTTPException(status_code=422, detail="reviewer is required when using the API key")
+    return supplied
 
 
 access_log = logging.getLogger("kartly.access")
@@ -108,7 +221,7 @@ def require_api_key(state: StateDep, x_api_key: Annotated[str | None, Header()] 
     if not x_api_key or not hmac.compare_digest(supplied, state.api_key.encode()):
         raise HTTPException(
             status_code=401,
-            detail="invalid or missing API key",
+            detail="invalid or missing credentials",
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
@@ -183,7 +296,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         ]
         return JSONResponse(status_code=422, content={"detail": problems})
 
-    @app.get("/v1/metrics", dependencies=[Depends(require_api_key)], tags=["ops"])
+    @app.get("/v1/metrics", dependencies=[Depends(read_access)], tags=["ops"])
     def metrics_json(
         state: StateDep,
         window_s: Annotated[float, Query(gt=0, le=90 * 86400)] = 86400.0,
@@ -193,7 +306,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/metrics",
         response_class=PlainTextResponse,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["ops"],
     )
     def metrics_prometheus(
@@ -213,7 +326,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/v1/alerts",
         response_model=AlertList,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["ops"],
     )
     def list_alerts(state: StateDep) -> AlertList:
@@ -227,7 +340,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.post(
         "/v1/alerts/check",
         response_model=AlertCheckOut,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(write_access)],
         tags=["ops"],
     )
     def check_alerts(state: StateDep) -> AlertCheckOut:
@@ -312,7 +425,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/v1/tickets/{ticket_id}",
         response_model=TicketOut,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["tickets"],
     )
     def get_ticket(ticket_id: uuid.UUID, db: DbDep) -> TicketOut:
@@ -356,7 +469,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/v1/runs/{run_id}/trace",
         response_model=TraceOut,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["runs"],
     )
     def get_trace(run_id: uuid.UUID, db: DbDep) -> dict[str, Any]:
@@ -398,7 +511,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/v1/approvals",
         response_model=ApprovalList,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["approvals"],
     )
     def list_approvals(
@@ -419,7 +532,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/v1/approvals/{approval_id}",
         response_model=ApprovalOut,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["approvals"],
     )
     def get_approval(approval_id: uuid.UUID, db: DbDep) -> ApprovalOut:
@@ -435,6 +548,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         response: Response,
         *,
         approve: bool,
+        reviewer: str,
     ) -> DecisionOut:
         gateway = _gateway(state)
         # Short sessions of their own: none is open while the gateway decides, so the decision
@@ -443,7 +557,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
             if session.get(Approval, approval_id) is None:
                 raise HTTPException(status_code=404, detail="approval not found")
         decision = gateway.decide(
-            approval_id, approve=approve, actor=f"human:{body.reviewer}", note=body.note
+            approval_id, approve=approve, actor=f"human:{reviewer}", note=body.note
         )
         with state.session_factory() as session:
             approval = session.get(Approval, approval_id)
@@ -463,7 +577,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.post(
         "/v1/approvals/{approval_id}/approve",
         response_model=DecisionOut,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(write_access)],
         tags=["approvals"],
     )
     def approve(
@@ -471,13 +585,15 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         body: ApprovalDecide,
         state: StateDep,
         response: Response,
+        principal: WriteDep,
     ) -> DecisionOut:
-        return _decide(state, approval_id, body, response, approve=True)
+        who = _actor_name(principal, body.reviewer)
+        return _decide(state, approval_id, body, response, approve=True, reviewer=who)
 
     @app.post(
         "/v1/approvals/{approval_id}/reject",
         response_model=DecisionOut,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(write_access)],
         tags=["approvals"],
     )
     def reject(
@@ -485,8 +601,10 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         body: ApprovalDecide,
         state: StateDep,
         response: Response,
+        principal: WriteDep,
     ) -> DecisionOut:
-        return _decide(state, approval_id, body, response, approve=False)
+        who = _actor_name(principal, body.reviewer)
+        return _decide(state, approval_id, body, response, approve=False, reviewer=who)
 
     def _control_out(state: ControlState) -> ControlOut:
         return ControlOut(
@@ -506,7 +624,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/v1/controls",
         response_model=ControlList,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["controls"],
     )
     def list_controls(state: StateDep) -> ControlList:
@@ -515,12 +633,23 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.put(
         "/v1/controls/{name}",
         response_model=ControlChanged,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(write_access)],
         tags=["controls"],
     )
-    def set_control(name: str, body: ControlSet, state: StateDep) -> ControlChanged:
+    def set_control(
+        name: str, body: ControlSet, state: StateDep, principal: WriteDep
+    ) -> ControlChanged:
+        who = _actor_name(principal, body.reviewer)
+        if (
+            principal.role == "reviewer"
+            and name in _SAFE_VALUES
+            and body.value not in _SAFE_VALUES[name]
+        ):
+            raise HTTPException(
+                status_code=403, detail="a reviewer can stop things; an admin turns them back on"
+            )
         try:
-            new, changed = _controls(state).set(name, body.value, body.reviewer, body.reason)
+            new, changed = _controls(state).set(name, body.value, who, body.reason)
         except ControlError as exc:
             known = "unknown control" in str(exc)
             raise HTTPException(status_code=404 if known else 422, detail=str(exc)) from exc
@@ -529,7 +658,7 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
     @app.get(
         "/v1/dead-letters",
         response_model=DeadLetterList,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(read_access)],
         tags=["queue"],
     )
     def dead_letters(state: StateDep) -> DeadLetterList:
@@ -550,14 +679,185 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
 
     @app.post(
         "/v1/dead-letters/{job_id}/requeue",
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(write_access)],
         tags=["queue"],
         status_code=202,
     )
-    def requeue_dead(job_id: uuid.UUID, body: JobRequeue, state: StateDep) -> dict[str, str]:
-        if not _queue(state).requeue(job_id, f"human:{body.reviewer}"):
+    def requeue_dead(
+        job_id: uuid.UUID, body: JobRequeue, state: StateDep, principal: WriteDep
+    ) -> dict[str, str]:
+        who = _actor_name(principal, body.reviewer)
+        if not _queue(state).requeue(job_id, f"human:{who}"):
             raise HTTPException(status_code=404, detail="no dead job with that id")
         return {"status": "queued"}
+
+    # ---------------------------------------------------------------- sign-in and accounts
+
+    def _reviewers(state: ApiState) -> Reviewers:
+        if state.reviewers is None:
+            raise HTTPException(status_code=503, detail="sign-in is not configured")
+        return state.reviewers
+
+    @app.post("/v1/admin/login", response_model=MeOut, tags=["admin"])
+    def login(body: LoginBody, state: StateDep, response: Response) -> MeOut:
+        try:
+            result = _reviewers(state).login(body.username, body.password)
+        except AuthError:
+            raise HTTPException(status_code=401, detail="invalid username or password") from None
+        response.set_cookie(
+            SESSION_COOKIE,
+            result.token,
+            max_age=int(state.session_ttl_s),
+            httponly=True,
+            samesite="strict",
+            secure=state.cookie_secure,
+            path="/",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return MeOut(username=result.reviewer.username, role=result.reviewer.role, csrf=result.csrf)
+
+    @app.post("/v1/admin/logout", status_code=204, tags=["admin"])
+    def logout(
+        state: StateDep,
+        response: Response,
+        session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+    ) -> None:
+        if state.reviewers is not None:
+            state.reviewers.logout(session)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+
+    @app.get("/v1/admin/me", response_model=MeOut, tags=["admin"])
+    def me(principal: Annotated[Principal, Depends(read_access)], response: Response) -> MeOut:
+        if principal.via != "session" or principal.csrf is None:
+            raise HTTPException(status_code=403, detail="not a browser session")
+        response.headers["Cache-Control"] = "no-store"
+        return MeOut(username=principal.name, role=principal.role, csrf=principal.csrf)
+
+    def _reviewer_out(r: ReviewerView) -> ReviewerOut:
+        return ReviewerOut(
+            username=r.username,
+            role=r.role,
+            active=r.active,
+            locked=r.locked,
+            created_at=r.created_at,
+            last_login_at=r.last_login_at,
+        )
+
+    def _account_error(exc: ReviewerError) -> HTTPException:
+        code = 404 if isinstance(exc, ReviewerNotFoundError) else 422
+        return HTTPException(status_code=code, detail=str(exc))
+
+    @app.get(
+        "/v1/admin/reviewers",
+        response_model=ReviewerList,
+        dependencies=[Depends(admin_read_access)],
+        tags=["admin"],
+    )
+    def list_reviewers(state: StateDep) -> ReviewerList:
+        return ReviewerList(reviewers=[_reviewer_out(r) for r in _reviewers(state).all()])
+
+    @app.post(
+        "/v1/admin/reviewers",
+        response_model=ReviewerOut,
+        status_code=201,
+        tags=["admin"],
+    )
+    def create_reviewer(
+        body: ReviewerCreate,
+        state: StateDep,
+        admin: Annotated[Principal, Depends(admin_access)],
+    ) -> ReviewerOut:
+        try:
+            created = _reviewers(state).create(
+                body.username, body.password, body.role, actor=admin.name
+            )
+        except ReviewerError as exc:
+            raise _account_error(exc) from exc
+        return _reviewer_out(created)
+
+    @app.put("/v1/admin/reviewers/{username}/password", status_code=204, tags=["admin"])
+    def set_reviewer_password(
+        username: str,
+        body: PasswordSet,
+        state: StateDep,
+        admin: Annotated[Principal, Depends(admin_access)],
+    ) -> None:
+        try:
+            _reviewers(state).set_password(username, body.password, actor=admin.name)
+        except ReviewerError as exc:
+            raise _account_error(exc) from exc
+
+    @app.put("/v1/admin/reviewers/{username}/active", status_code=204, tags=["admin"])
+    def set_reviewer_active(
+        username: str,
+        body: ActiveSet,
+        state: StateDep,
+        admin: Annotated[Principal, Depends(admin_access)],
+    ) -> None:
+        try:
+            _reviewers(state).set_active(username, body.active, actor=admin.name)
+        except ReviewerError as exc:
+            raise _account_error(exc) from exc
+
+    # ---------------------------------------------------------------- listing tickets
+
+    @app.get(
+        "/v1/tickets",
+        response_model=TicketList,
+        dependencies=[Depends(read_access)],
+        tags=["tickets"],
+    )
+    def list_tickets(
+        db: DbDep,
+        status: str | None = None,
+        customer_id: Annotated[str | None, Query(max_length=40)] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        before: Annotated[str | None, Query(max_length=80)] = None,
+    ) -> TicketList:
+        query = select(Ticket)
+        if status is not None:
+            try:
+                query = query.where(Ticket.status == TicketStatus(status))
+            except ValueError:
+                raise HTTPException(status_code=422, detail="unknown status") from None
+        if customer_id is not None:
+            query = query.where(Ticket.customer_id == customer_id)
+        if before is not None:
+            moment, _, ident = before.partition("_")
+            try:
+                at, tid = datetime.fromisoformat(moment), uuid.UUID(ident)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="bad cursor") from None
+            query = query.where(
+                or_(Ticket.created_at < at, and_(Ticket.created_at == at, Ticket.id < tid))
+            )
+        rows = db.scalars(
+            query.order_by(Ticket.created_at.desc(), Ticket.id.desc()).limit(limit)
+        ).all()
+        latest = (
+            select(Run.outcome)
+            .where(Run.ticket_id == Ticket.id)
+            .order_by(Run.started_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        outcomes: dict[uuid.UUID, str | None] = dict(
+            db.execute(select(Ticket.id, latest).where(Ticket.id.in_([t.id for t in rows]))).all()
+        )
+        nxt = f"{rows[-1].created_at.isoformat()}_{rows[-1].id}" if len(rows) == limit else None
+        return TicketList(
+            tickets=[
+                TicketSummary(
+                    id=t.id,
+                    customer_id=t.customer_id,
+                    status=t.status.value,
+                    created_at=t.created_at,
+                    last_run_outcome=outcomes.get(t.id),
+                )
+                for t in rows
+            ],
+            next_before=nxt,
+        )
 
     return app
 

@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # Off by default: when on, a critical alert may freeze writes or switch the agent off.
     alert_auto_actions: bool = False
     alert_webhook_url: str | None = None  # an https URL that accepts {"text": "..."}
+    # Admin sign-in (ADR-056)
+    session_ttl_s: float = 12 * 3600.0  # a session ends this long after sign-in
+    session_idle_s: float = 2 * 3600.0  # ...or this long after it was last used
+    cookie_secure: bool = False  # set true behind https: the cookie is then never sent over http
 
 
 @lru_cache
