@@ -338,6 +338,12 @@ uv run --active python -m kartly.reviewers list | passwd | disable | enable | un
 
 Passwords are 12 to 200 characters and stored with scrypt. A session lasts 12 hours at most and ends after 2 hours idle (`KARTLY_SESSION_TTL_S`, `KARTLY_SESSION_IDLE_S`); only a hash of the cookie is stored. Five wrong passwords lock the account for 15 minutes; every failure gives the same answer. Set `KARTLY_COOKIE_SECURE=true` behind https. Roles: a **reviewer** can read, decide approvals, requeue dead letters and stop things (freeze writes, switch the agent off); an **admin** can also turn those back on and manage accounts (`/v1/admin/reviewers`). The last active admin cannot be disabled. `GET /v1/tickets` lists tickets (filters `status`, `customer_id`; `before` cursor). See ADR-056.
 
+## Admin page
+
+Open `http://localhost:8000/admin` and sign in with a reviewer account (see Admin sign-in). The page has an overview of the metrics (24 hours by default), a ticket list with the full conversation and each run's trace, the approvals waiting (with what each would do, and Approve / Reject with an optional note), dead letters with a Requeue button, the alert rules and their state with a Check now button, the two controls (reviewers can stop things; an admin turns them back on), and, for admins, account management. Counts of waiting approvals, dead letters and firing alerts show on the menu and refresh every 15 seconds. Sections for features this server does not run (the job queue, alerts) say so instead of failing.
+
+It is three static files (`src/kartly/api/static/`) with no build step and no third-party code. The server sends a Content-Security-Policy that allows only those files and forbids inline script and style, and the script puts every value on the page as text, so a customer message containing HTML shows as the characters it is. Only the page itself needs no sign-in; every figure comes from the same API routes, which do. Put it behind https and set `KARTLY_COOKIE_SECURE=true` anywhere other than your own machine.
+
 ## Kill switch
 
 Two switches that take effect on the next ticket (or the next write) in every worker, with no deploy. They live in the `controls` table (run `uv run --active alembic upgrade head` once), and each change is recorded in the audit log with who made it and why.
@@ -459,7 +465,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [x] 6a: metrics from the database (`GET /v1/metrics`, Prometheus `GET /metrics`), a request id on every response and one access-log line per request (ADR-054)
 - [x] 6b: alerts on those metrics (escalation spike, model errors, failing tools, stuck queue, dead letters, aging approvals, cross-customer access, failed writes), announced once per change, with optional automatic kill-switch actions (ADR-055)
 - [x] 6c: reviewer accounts, cookie sign-in with CSRF protection and roles, account management API, ticket list (ADR-056)
-- [ ] 6d: admin UI page: tickets, traces, approvals, dead letters, alerts, controls
+- [x] 6d: admin UI page at `/admin`: overview, tickets and traces, approvals, dead letters, alerts, controls, accounts (ADR-057)
 - [ ] 6e: routing experiments and shadow pricing report
 
 **Week 7: delivery.** CI/CD, Docker image, deployment.

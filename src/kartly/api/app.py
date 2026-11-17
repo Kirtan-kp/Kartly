@@ -28,6 +28,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -127,6 +128,16 @@ StateDep = Annotated[ApiState, Depends(_state)]
 
 
 SESSION_COOKIE = "kartly_session"
+STATIC_DIR = Path(__file__).parent / "static"
+_PAGE_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+        "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-cache",
+}
 # A reviewer may stop things; only an admin (or the service API key) may start them again.
 _SAFE_VALUES = {"agent": {"off"}, "writes": {"frozen"}}
 
@@ -295,6 +306,25 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
             for e in exc.errors()
         ]
         return JSONResponse(status_code=422, content={"detail": problems})
+
+    # ---------------------------------------------------------------- the admin page
+    # Three static files. The page loads nothing from anywhere else, so the policy forbids it;
+    # with no inline script or style, a customer-written string cannot become running code.
+
+    def _asset(name: str, media_type: str) -> Callable[[], Response]:
+        body = (STATIC_DIR / name).read_bytes()
+
+        def serve() -> Response:
+            return Response(body, media_type=media_type, headers=_PAGE_HEADERS)
+
+        return serve
+
+    for route, name, media in (
+        ("/admin", "admin.html", "text/html; charset=utf-8"),
+        ("/admin/admin.js", "admin.js", "text/javascript; charset=utf-8"),
+        ("/admin/admin.css", "admin.css", "text/css; charset=utf-8"),
+    ):
+        app.add_api_route(route, _asset(name, media), methods=["GET"], include_in_schema=False)
 
     @app.get("/v1/metrics", dependencies=[Depends(read_access)], tags=["ops"])
     def metrics_json(
