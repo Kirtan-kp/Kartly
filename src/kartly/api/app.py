@@ -73,7 +73,9 @@ from kartly.api.schemas import (
     TraceOut,
 )
 from kartly.controls import ControlError, Controls, ControlState
+from kartly.costs import build_report
 from kartly.gateway import ToolGateway
+from kartly.llm.config import ModelsFile
 from kartly.metrics import collect, to_prometheus
 from kartly.orchestrator import TicketRunner, UnknownCustomerError, load_trace
 from kartly.queue import JobQueue
@@ -114,6 +116,7 @@ class ApiState:
     alerts: AlertManager | None = None
     alert_loop: AlertLoop | None = None  # checks the alert rules on a timer
     reviewers: Reviewers | None = None  # admin accounts and sessions
+    models: ModelsFile | None = None  # prices for the cost report's what-if section
     cookie_secure: bool = False  # mark the session cookie Secure (https only)
     session_ttl_s: float = 12 * 3600.0
 
@@ -325,6 +328,13 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         ("/admin/admin.css", "admin.css", "text/css; charset=utf-8"),
     ):
         app.add_api_route(route, _asset(name, media), methods=["GET"], include_in_schema=False)
+
+    @app.get("/v1/costs", dependencies=[Depends(read_access)], tags=["ops"])
+    def costs_report(
+        state: StateDep,
+        window_s: Annotated[float, Query(gt=0, le=365 * 86400)] = 7 * 86400.0,
+    ) -> dict[str, Any]:
+        return build_report(state.session_factory, state.models, window_s=window_s)
 
     @app.get("/v1/metrics", dependencies=[Depends(read_access)], tags=["ops"])
     def metrics_json(

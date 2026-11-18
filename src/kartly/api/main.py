@@ -21,6 +21,7 @@ from kartly.controls import Controls
 from kartly.gateway import ToolGateway, modes_from_settings
 from kartly.guards.claims import ClaimJudge
 from kartly.llm import LLMConfigError, ModelRegistry, RetryPolicy
+from kartly.llm.config import ModelsFile, load_models_file
 from kartly.orchestrator import TicketRunner
 from kartly.queue import JobQueue
 from kartly.retrieval import EmbeddingError, KnowledgeBaseError
@@ -100,6 +101,14 @@ def build_runtime(*, require_api_key: bool = False) -> Runtime:
     return Runtime(settings, factory, runner, gateway, controls, queue, close)
 
 
+def _load_models(path: str) -> ModelsFile | None:
+    """The price list for the cost report; the API still starts without it."""
+    try:
+        return load_models_file(path)
+    except LLMConfigError:
+        return None
+
+
 def create_app_from_env() -> FastAPI:
     rt = build_runtime(require_api_key=True)
     settings = rt.settings
@@ -146,6 +155,7 @@ def create_app_from_env() -> FastAPI:
             session_ttl_s=settings.session_ttl_s,
             session_idle_s=settings.session_idle_s,
         ),
+        models=_load_models(settings.models_config_path),
         cookie_secure=settings.cookie_secure,
         session_ttl_s=settings.session_ttl_s,
         alert_loop=AlertLoop(manager, settings.alert_interval_s) if manager else None,

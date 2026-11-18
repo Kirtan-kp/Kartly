@@ -344,6 +344,12 @@ Open `http://localhost:8000/admin` and sign in with a reviewer account (see Admi
 
 It is three static files (`src/kartly/api/static/`) with no build step and no third-party code. The server sends a Content-Security-Policy that allows only those files and forbids inline script and style, and the script puts every value on the page as text, so a customer message containing HTML shows as the characters it is. Only the page itself needs no sign-in; every figure comes from the same API routes, which do. Put it behind https and set `KARTLY_COOKIE_SECURE=true` anywhere other than your own machine.
 
+## Cost report
+
+`uv run --active python -m kartly.costs --days 7` (add `--json` for machine output), `GET /v1/costs?window_s=604800` and the Costs tab of the admin page read the stored runs and show: total cost, cost per run (average, median, 95th percentile, dearest) and per 1,000 runs; each model's calls, tokens and cost; each routing tier's runs, escalations and failures and the **cost per answered ticket** (spend on tickets nobody answered is charged to the ones that were); and a what-if: the same tokens priced at every model in `config/models.yaml`, plus how much the routing saves against sending everything to the `large` role's first model.
+
+Read it as a guide to order of magnitude. Prices are the reference prices in `models.yaml` (real spend on a free tier or local model is $0). The what-if keeps the recorded token counts, ignores cached-prompt discounts, and says nothing about answer quality: a cheaper model that escalates more or gets claims wrong is not cheaper, and that is what the evals measure. See ADR-058.
+
 ## Kill switch
 
 Two switches that take effect on the next ticket (or the next write) in every worker, with no deploy. They live in the `controls` table (run `uv run --active alembic upgrade head` once), and each change is recorded in the audit log with who made it and why.
@@ -466,7 +472,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [x] 6b: alerts on those metrics (escalation spike, model errors, failing tools, stuck queue, dead letters, aging approvals, cross-customer access, failed writes), announced once per change, with optional automatic kill-switch actions (ADR-055)
 - [x] 6c: reviewer accounts, cookie sign-in with CSRF protection and roles, account management API, ticket list (ADR-056)
 - [x] 6d: admin UI page at `/admin`: overview, tickets and traces, approvals, dead letters, alerts, controls, accounts (ADR-057)
-- [ ] 6e: routing experiments and shadow pricing report
+- [x] 6e: shadow pricing report: cost by model and routing tier, per-ticket cost, what-if repricing, routing saving (ADR-058); routing experiments with real models run through `--model` evals
 
 **Week 7: delivery.** CI/CD, Docker image, deployment.
 

@@ -69,3 +69,4 @@ details { margin: 4px 0; } summary { cursor: pointer; }
 .mb8 { margin-bottom: 8px; } .mb12 { margin-bottom: 12px; } .m0b6 { margin: 0 0 6px; } .m0b4 { margin: 0 0 4px; } .my4 { margin: 4px 0; } .w100 { width: 100%; }
 .scroll { overflow-x: auto; }
 .split > * { min-width: 0; }
+ul { padding-left: 18px; margin: 4px 0; }

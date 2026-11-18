@@ -68,7 +68,7 @@ const notice = (text, bad) => h("div", { class: "notice" + (bad ? " bad" : "") }
 // ---------------------------------------------------------------------------- shell
 
 const VIEWS = [
-  ["overview", "Overview"], ["tickets", "Tickets"], ["approvals", "Approvals"],
+  ["overview", "Overview"], ["costs", "Costs"], ["tickets", "Tickets"], ["approvals", "Approvals"],
   ["dead", "Dead letters"], ["alerts", "Alerts"], ["controls", "Controls"], ["accounts", "Accounts"],
 ];
 let counts = { approvals: 0, dead: 0, alerts: 0 };
@@ -155,6 +155,29 @@ async function signOut() {
 // ---------------------------------------------------------------------------- views
 
 const card = (k, v, cls) => h("div", { class: "card " + (cls || "") }, h("div", { class: "k" }, k), h("div", { class: "v" }, v));
+
+async function costs() {
+  const days = { 1: "1 day", 7: "7 days", 30: "30 days" };
+  const sel = h("select", { onchange: () => { costs.d = Number(sel.value); render(); } },
+    Object.entries(days).map(([v, l]) => h("option", { value: v, selected: Number(v) === (costs.d || 7) }, l)));
+  const r = await api("GET", "/v1/costs?window_s=" + (costs.d || 7) * 86400);
+  const t = r.total, p = r.per_run, wi = r.what_if;
+  return h("div", {},
+    h("div", { class: "row" }, h("h2", { class: "m0" }, "Costs"), sel, h("span", { class: "muted" }, "at reference prices; real spend on a free tier is $0")),
+    h("div", { class: "grid" },
+      card("Total", "$" + t.cost_usd), card("Per 1,000 runs", t.per_1000_runs_usd ? "$" + t.per_1000_runs_usd : "-"),
+      card("Per run (avg)", p.avg_usd ? "$" + p.avg_usd : "-"), card("Per run (p95)", p.p95_usd ? "$" + p.p95_usd : "-"),
+      card("Tokens in / out", t.tokens_in.toLocaleString() + " / " + t.tokens_out.toLocaleString()),
+      wi && wi.routing_saving_vs_baseline !== null ? (wi.routing_saving_vs_baseline >= 0 ? card("Routing saves", pct(wi.routing_saving_vs_baseline), "ok") : card("Routing costs extra", pct(-wi.routing_saving_vs_baseline), "warn")) : null),
+    h("h3", {}, "By model"),
+    tableOf(["Model", "Calls", "Tokens in", "Tokens out", "Cost"], r.by_model.map((m) => [m.model, m.calls, m.tokens_in.toLocaleString(), m.tokens_out.toLocaleString(), "$" + m.cost_usd])),
+    h("h3", {}, "By routing tier"),
+    tableOf(["Tier", "Runs", "Escalated", "Failed", "Cost", "Per answered ticket"], r.by_tier.map((g) => [g.tier, g.runs, g.escalated, g.failed, "$" + g.cost_usd, g.cost_per_answered_usd ? "$" + g.cost_per_answered_usd : "-"])),
+    wi ? h("div", {}, h("h3", {}, "The same tokens on one model for everything"),
+      tableOf(["Model", "Cost", "Compared with actual"], wi.all_traffic_on.map((s) => [s.model, "$" + s.cost_usd, s.vs_actual === null ? "-" : s.vs_actual.toFixed(2) + "x"]))) : null,
+    h("h3", {}, "Read this carefully"),
+    h("ul", {}, r.notes.map((n) => h("li", { class: "muted" }, n))));
+}
 
 async function overview() {
   const windows = { 3600: "1 hour", 86400: "24 hours", 604800: "7 days" };
@@ -347,7 +370,7 @@ async function accounts() {
       h("button", { class: "btn primary", onclick: () => act(() => api("POST", "/v1/admin/reviewers", { username: u.value, password: p.value, role: r.value })) }, "Create")));
 }
 
-const views = { overview, tickets, approvals, dead, alerts, controls, accounts };
+const views = { overview, costs, tickets, approvals, dead, alerts, controls, accounts };
 
 // ---------------------------------------------------------------------------- start
 
