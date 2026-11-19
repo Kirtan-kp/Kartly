@@ -44,6 +44,8 @@ export KARTLY_TEST_DATABASE_URL=postgresql+psycopg://kartly:kartly@localhost:543
 pytest                             # Windows PowerShell: $env:KARTLY_TEST_DATABASE_URL="..."
 ```
 
+Browser tests of the admin page run in Chromium and are skipped when it is not installed: `pip install -e ".[dev]"` then `playwright install chromium`, and `pytest tests/browser`. Plain `pytest` includes them once the browser is there; add `-m "not browser"` to leave them out.
+
 The Postgres tests drop and recreate the `public` schema, so they refuse to run unless the database name contains `test`. Without `KARTLY_TEST_DATABASE_URL` they are skipped.
 
 ## Mock store and eval fixtures
@@ -474,7 +476,11 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 - [x] 6d: admin UI page at `/admin`: overview, tickets and traces, approvals, dead letters, alerts, controls, accounts (ADR-057)
 - [x] 6e: shadow pricing report: cost by model and routing tier, per-ticket cost, what-if repricing, routing saving (ADR-058); routing experiments with real models run through `--model` evals
 
-**Week 7: delivery.** CI/CD, Docker image, deployment.
+**Week 7: delivery.**
+
+- [x] 7a: CI: lint, types, tests on Python 3.11 and 3.12, Postgres tests plus a real migration and command-line smoke run, browser tests of the admin page, a dependency audit, Dependabot (ADR-059)
+- [ ] 7b: Docker image and compose file for the API, a worker and Postgres
+- [ ] 7c: deployment guide (https, secrets, backups, upgrade and rollback)
 
 **Week 8: polish.** README, demo, write-up.
 
