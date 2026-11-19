@@ -13,9 +13,9 @@ action half done, the job is buried for a human instead (``unsafe_to_retry``).
 from __future__ import annotations
 
 import argparse
-import contextlib
 import logging
 import os
+import signal
 import socket
 import threading
 import uuid
@@ -135,7 +135,7 @@ class WorkerPool:
         self._threads.clear()
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, stop: threading.Event | None = None) -> int:
     from kartly.api.main import build_runtime  # imported here: it pulls in the whole stack
 
     parser = argparse.ArgumentParser(description="Run Kartly queue workers.")
@@ -152,9 +152,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         runtime.settings.worker_poll_s,
     )
     pool.start()
-    print(f"{n} worker(s) running; Ctrl+C to stop")
-    with contextlib.suppress(KeyboardInterrupt):
-        threading.Event().wait()
+    if stop is None:
+        # SIGTERM is what `docker stop` and systemd send. Without a handler, a process that is
+        # PID 1 in a container ignores it and is killed ten seconds later with jobs half done.
+        stop = threading.Event()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda *_: stop.set())
+    print(f"{n} worker(s) running; Ctrl+C or SIGTERM to stop", flush=True)
+    stop.wait()
+    print("stopping: finishing the jobs in hand", flush=True)
     pool.stop()
     runtime.close()
     return 0

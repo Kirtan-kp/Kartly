@@ -36,7 +36,12 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-kartly = ["api/static/*"]
+kartly = [
+  "api/static/*",
+  "store/migrations/env.py",
+  "store/migrations/script.py.mako",
+  "store/migrations/versions/*.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

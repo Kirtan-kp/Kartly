@@ -1,0 +1,96 @@
+# Postgres, a one-off migration, the API and a worker. See "Run it in containers" in README.md.
+#   cp .env.deploy.example .env.deploy        # then fill it in
+#   docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build
+# This is separate from docker-compose.yml, which only starts the development databases.
+name: kartly
+
+x-app: &app
+  build: .
+  image: kartly:local
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  env_file:
+    - .env.deploy
+  # Set here, so a copied development .env can never point the containers at the wrong place.
+  environment: &env
+    KARTLY_DATABASE_URL: postgresql+psycopg://kartly:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.deploy}@postgres:5432/kartly
+    KARTLY_API_KEY: ${KARTLY_API_KEY:?set KARTLY_API_KEY in .env.deploy}
+    KARTLY_QUEUE_MODE: db
+    KARTLY_EMBEDDED_WORKERS: "0"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kartly
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.deploy}
+      POSTGRES_DB: kartly
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kartly -d kartly"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  # Runs once per start and exits. The API and the worker wait for it to finish successfully, so
+  # a failed migration stops the deployment instead of running new code on an old schema.
+  migrate:
+    <<: *app
+    command: ["python", "-m", "kartly.migrate", "--wait", "60"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["python", "-m", "kartly.api", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:${KARTLY_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # /healthz answers 503 when the database is down, which makes urlopen raise.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "kartly.worker"]
+    # On stop the worker finishes the jobs in hand (up to 150 s) before exiting.
+    stop_grace_period: 170s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

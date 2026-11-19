@@ -352,6 +352,22 @@ It is three static files (`src/kartly/api/static/`) with no build step and no th
 
 Read it as a guide to order of magnitude. Prices are the reference prices in `models.yaml` (real spend on a free tier or local model is $0). The what-if keeps the recorded token counts, ignores cached-prompt discounts, and says nothing about answer quality: a cheaper model that escalates more or gets claims wrong is not cheaper, and that is what the evals measure. See ADR-058.
 
+## Run it in containers
+
+`docker-compose.yml` only starts the development databases. To run the whole service (Postgres, a one-off migration, the API and a worker) from one image:
+
+```bash
+cp .env.deploy.example .env.deploy        # fill in POSTGRES_PASSWORD and KARTLY_API_KEY (openssl rand -hex 24)
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml exec api python -m kartly.reviewers add maya --role admin
+```
+
+Then open `http://127.0.0.1:8000/admin`. Startup order is enforced: Postgres is healthy, then `migrate` runs and must succeed, then the API and the worker start, so a failed migration stops the deployment instead of running new code on an old schema. The API is published on `127.0.0.1` only; Postgres is not published at all. Put a reverse proxy with https in front of the API for anything beyond your own machine, and set `KARTLY_COOKIE_SECURE=true` once you do.
+
+The containers run as an unprivileged user (uid 10001) with a read-only root filesystem, no Linux capabilities and `no-new-privileges`; logs rotate. The worker finishes the jobs it holds when stopped (`docker compose stop worker` waits up to 170 s). Add workers with `--scale worker=3`. Ollama on the host is reached at `host.docker.internal`. Seed demo data once with `exec api python -m kartly.store.seed` (never `--reset` on data you want to keep).
+
+`python -m kartly.migrate` is the migration command a deployment runs. It works from an installed package, waits for a database that is still starting, and `--check` exits 0 only when the schema is at the latest revision. `scripts/compose-smoke.sh` builds the image, starts the stack with throwaway secrets, checks it end to end and removes it; CI runs it. See ADR-060.
+
 ## Kill switch
 
 Two switches that take effect on the next ticket (or the next write) in every worker, with no deploy. They live in the `controls` table (run `uv run --active alembic upgrade head` once), and each change is recorded in the audit log with who made it and why.
@@ -479,7 +495,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 **Week 7: delivery.**
 
 - [x] 7a: CI: lint, types, tests on Python 3.11 and 3.12, Postgres tests plus a real migration and command-line smoke run, browser tests of the admin page, a dependency audit, Dependabot (ADR-059)
-- [ ] 7b: Docker image and compose file for the API, a worker and Postgres
+- [x] 7b: Docker image and compose file for the API, a worker and Postgres; `python -m kartly.migrate`; workers stop cleanly on SIGTERM; container smoke test in CI (ADR-060)
 - [ ] 7c: deployment guide (https, secrets, backups, upgrade and rollback)
 
 **Week 8: polish.** README, demo, write-up.

@@ -93,7 +93,7 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
       - run: pytest -q -m "not browser"
-      # The same path a deployment takes: the real migration command on an empty database, then
+      # The same path a deployment takes: the packaged migration command on an empty database, then
       # each command-line tool against the schema it produced.
       - name: Migrate an empty database and run the command-line tools against it
         env:
@@ -101,7 +101,8 @@ jobs:
           KARTLY_DATABASE_URL: postgresql+psycopg://kartly:kartly@localhost:5432/kartly_cli
         run: |
           psql -h localhost -U kartly -d kartly_test -c "CREATE DATABASE kartly_cli"
-          alembic upgrade head
+          python -m kartly.migrate --wait 30
+          python -m kartly.migrate --check
           alembic check
           python -m kartly.alerts
           python -m kartly.costs --days 1
@@ -120,6 +121,15 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: playwright install --with-deps chromium
       - run: pytest -q tests/browser
+
+  # Builds the image and starts the whole stack (Postgres, migration, API, worker) the way
+  # docker-compose.deploy.yml does, then checks it is up, locked down and stops cleanly.
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/compose-smoke.sh
 
   # Known vulnerabilities in the installed dependencies. Reported, not blocking: an advisory
   # appearing for a package we did not touch should not turn every pull request red.

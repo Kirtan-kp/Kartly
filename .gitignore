@@ -25,4 +25,8 @@ htmlcov/
 *.sqlite
 *.db
 
+# Deployment secrets and the smoke test's temporary files
+.env.deploy
+.env.deploy.smoke
+docker-compose.smoke.yml
 evals/runs

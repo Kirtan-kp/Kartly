@@ -1,0 +1,26 @@
+# Keep secrets, local state and everything the image does not run out of the build context.
+.git
+.github
+.venv
+venv
+.env
+.env.*
+!.env.deploy.example
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.hypothesis
+*.egg-info
+*.db
+*.patch
+tests
+evals
+scripts
+DESIGN.md
+DECISIONS.md
+docker-compose*.yml
+Dockerfile
+build
+dist

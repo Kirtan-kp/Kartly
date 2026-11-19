@@ -76,7 +76,13 @@ def test_the_postgres_job_really_runs_the_postgres_tests(ci: dict[str, Any]) -> 
     assert url.startswith("postgresql+psycopg://") and url.endswith("/kartly_test")
     assert "postgres" in job["services"]
     assert "pytest" in commands(job) and "not postgres" not in commands(job)
-    for cmd in ("alembic upgrade head", "alembic check", "kartly.alerts", "kartly.costs"):
+    for cmd in (
+        "kartly.migrate",
+        "kartly.migrate --check",
+        "alembic check",
+        "kartly.alerts",
+        "kartly.costs",
+    ):
         assert cmd in commands(job), cmd
 
 
@@ -87,6 +93,11 @@ def test_the_browser_job_installs_a_browser_and_the_others_skip_those_tests(
     assert "playwright install" in commands(job) and "tests/browser" in commands(job)
     for name in ("test", "postgres"):
         assert "not browser" in commands(ci["jobs"][name]), name
+
+
+def test_the_container_job_runs_the_smoke_script(ci: dict[str, Any]) -> None:
+    assert "scripts/compose-smoke.sh" in commands(ci["jobs"]["container"])
+    assert (ROOT / "scripts" / "compose-smoke.sh").is_file()
 
 
 def test_the_audit_cannot_block_a_change_but_the_checks_can(ci: dict[str, Any]) -> None:
