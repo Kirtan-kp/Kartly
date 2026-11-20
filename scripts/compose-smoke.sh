@@ -56,7 +56,10 @@ curl -sD - -o /dev/null "http://127.0.0.1:$PORT/admin" | grep -qi '^content-secu
 step "the containers are locked down"
 [ "$(dc exec -T api id -u)" = "10001" ] || fail "the API runs as root"
 if dc exec -T api sh -c 'touch /app/should-not-work' 2>/dev/null; then fail "the filesystem is writable"; fi
-if dc port postgres 5432 2>/dev/null | grep -q .; then fail "postgres is published on the host"; fi
+# `compose port` prints something even for a port that is not published, so ask Docker which host
+# ports the container really has (none for a port that is only reachable inside the network).
+published="$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostPort}} {{end}}{{end}}' "$(dc ps -q postgres)")"
+[ -z "${published// /}" ] || fail "postgres is published on the host (port ${published})"
 
 step "the worker stops cleanly when told to"
 dc stop worker

@@ -37,8 +37,13 @@ def server(migrated: Engine) -> Engine:
     found = re.search(r"\)\s+(\d+)", version)
     assert found, version
     client_major = int(found.group(1))
-    if client_major < server_major:
-        pytest.skip(f"pg_dump {client_major} is older than the server {server_major}")
+    if client_major != server_major:
+        # An older client cannot read a newer server, and a newer one writes SQL an older server
+        # rejects. Deployments run the tools inside the database container, so they always match.
+        reason = f"pg_dump {client_major} does not match the server {server_major}"
+        if os.environ.get("CI"):
+            pytest.fail(reason)  # in CI a mismatch must be fixed, not hidden by a skip
+        pytest.skip(reason)
     return migrated
 
 

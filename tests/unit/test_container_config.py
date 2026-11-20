@@ -207,8 +207,10 @@ def test_the_smoke_script_checks_what_the_stack_promises() -> None:
         "10001",
         "should-not-work",
         "stop worker",
+        "HostPort",  # asks Docker which host ports are really open; `compose port` always answers
     ):
         assert promise in text, promise
+    assert "dc port postgres" not in text  # prints ":0" for a port that is not published
 
 
 # ------------------------------------------------------------------------------ the https proxy

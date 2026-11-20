@@ -92,6 +92,13 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
+      # The runner's own pg_dump is newer than the server, and a newer pg_dump writes SQL an older
+      # server rejects ("unrecognized configuration parameter"). Use a client of the server's version.
+      - name: Install the PostgreSQL 16 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - run: pytest -q -m "not browser"
       # The same path a deployment takes: the packaged migration command on an empty database, then
       # each command-line tool against the schema it produced.

@@ -116,3 +116,11 @@ def test_every_command_the_workflow_runs_exists_in_the_project() -> None:
     text = WORKFLOW.read_text()
     for module in re.findall(r"python -m (kartly\.\w+)", text):
         assert (ROOT / "src" / (module.replace(".", "/") + ".py")).exists(), module
+
+
+def test_the_postgres_job_uses_a_client_that_matches_the_server() -> None:
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    server = re.search(r"image: pgvector/pgvector:pg(\d+)", text)
+    assert server, "the postgres service image changed shape"
+    assert f"postgresql-client-{server.group(1)}" in text
+    assert f"/usr/lib/postgresql/{server.group(1)}/bin" in text
