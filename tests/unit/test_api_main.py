@@ -133,6 +133,26 @@ def test_no_router_unless_configured(wired: Engine, fake_server: FakeOpenAIServe
     assert "response_format" not in fake_server.requests[0]["body"]
 
 
+def test_the_exposure_settings_reach_the_app(
+    wired: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib
+
+    wiring = importlib.import_module("kartly.api.main")
+
+    default = create_app_from_env().state.kartly
+    assert (default.docs_enabled, default.cookie_secure) == (True, False)
+    base = wiring.get_settings
+    monkeypatch.setattr(
+        wiring,
+        "get_settings",
+        lambda: base().model_copy(update={"docs_enabled": False, "cookie_secure": True}),
+    )
+    app = create_app_from_env()
+    assert (app.state.kartly.docs_enabled, app.state.kartly.cookie_secure) == (False, True)
+    assert TestClient(app).get("/docs").status_code == 404
+
+
 def test_the_worker_limits_come_from_the_settings(wired: Engine) -> None:
     executor = create_app_from_env().state.kartly.executor
     assert (executor.max_workers, executor.max_pending) == (2, 5)

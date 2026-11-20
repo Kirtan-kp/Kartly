@@ -192,7 +192,7 @@ Behaviour worth knowing (ADR-027):
 - **Bad input is a plain `422`** that names the field and the rule but never repeats what you sent. A message is 1-4,000 characters; unknown fields are rejected.
 - A run that cannot answer is not an error: the ticket is `escalated` and the response says why (`stop_reason`).
 
-Not built yet: request-size limits (a reverse proxy does that, Week 7), rate limits per caller, and per-caller authentication. `/docs` is open on purpose while this is local; turn it off before exposing the service.
+Not built yet: rate limits per caller and per-caller authentication. Request-size limits come from the reverse proxy (`deploy/Caddyfile`). `/docs` is open by default for local use; `KARTLY_DOCS_ENABLED=false` turns it off (the https overlay does).
 
 ## Evals
 
@@ -368,6 +368,8 @@ The containers run as an unprivileged user (uid 10001) with a read-only root fil
 
 `python -m kartly.migrate` is the migration command a deployment runs. It works from an installed package, waits for a database that is still starting, and `--check` exits 0 only when the schema is at the latest revision. `scripts/compose-smoke.sh` builds the image, starts the stack with throwaway secrets, checks it end to end and removes it; CI runs it. See ADR-060.
 
+**Going beyond your own machine:** `docs/DEPLOY.md` is the deployment guide. In short: add `KARTLY_DOMAIN` to `.env.deploy` and start with `-f docker-compose.proxy.yml` for automatic https (Caddy), a secure cookie and no `/docs`; `scripts/backup.sh` takes a verified dump and `scripts/restore.sh FILE --yes` restores one (after saving the current data first); upgrades and rollbacks use `KARTLY_IMAGE_TAG`. See ADR-061.
+
 ## Kill switch
 
 Two switches that take effect on the next ticket (or the next write) in every worker, with no deploy. They live in the `controls` table (run `uv run --active alembic upgrade head` once), and each change is recorded in the audit log with who made it and why.
@@ -496,7 +498,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 
 - [x] 7a: CI: lint, types, tests on Python 3.11 and 3.12, Postgres tests plus a real migration and command-line smoke run, browser tests of the admin page, a dependency audit, Dependabot (ADR-059)
 - [x] 7b: Docker image and compose file for the API, a worker and Postgres; `python -m kartly.migrate`; workers stop cleanly on SIGTERM; container smoke test in CI (ADR-060)
-- [ ] 7c: deployment guide (https, secrets, backups, upgrade and rollback)
+- [x] 7c: deployment guide: https through a reverse proxy, secrets, verified backups and restore, upgrade and rollback (docs/DEPLOY.md, ADR-061)
 
 **Week 8: polish.** README, demo, write-up.
 

@@ -128,6 +128,9 @@ class Case(_Strict):
     # out, the case runs with reads only, as every case did before Week 4.
     write_mode: Literal["shadow", "auto"] | None = None
     expect: Expect
+    # Other behaviours that are just as right (a model may legitimately take another safe path).
+    # The run passes if it fully meets ``expect`` or any one of these.
+    also_acceptable: list[Expect] = Field(default_factory=list)
     # What a human reviewer should know about why the case exists.
     notes: str = ""
 
@@ -142,12 +145,12 @@ class Case(_Strict):
 
     @model_validator(mode="after")
     def _writes_need_a_write_mode(self) -> Case:
-        e = self.expect
-        wants_writes = (
+        wants_writes = any(
             e.outcome == "awaiting_approval"
             or e.approvals > 0
             or any(t != "customers" for t in e.changed_tables)
             or any(c.severity == "quality" and c.field == "refunded_paise" for c in e.state)
+            for e in (self.expect, *self.also_acceptable)
         )
         if wants_writes and self.write_mode is None:
             raise ValueError("this case expects a write or an approval, so set write_mode")

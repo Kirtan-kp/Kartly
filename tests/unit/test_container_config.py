@@ -161,6 +161,14 @@ def test_every_variable_the_compose_file_needs_is_in_the_example() -> None:
     assert needed <= shown, needed - shown
 
 
+def test_every_variable_the_proxy_overlay_needs_is_in_the_example() -> None:
+    text = (ROOT / "docker-compose.proxy.yml").read_text()
+    needed = set(re.findall(r"\$\{([A-Z_]+)[:?-]", text))
+    shown = set(re.findall(r"^#?\s*([A-Z_]+)=", EXAMPLE, flags=re.M))
+    assert needed == {"KARTLY_DOMAIN"}
+    assert needed <= shown, needed - shown
+
+
 def test_the_example_contains_no_real_secrets() -> None:
     values = dict(re.findall(r"^([A-Z_]+)=(.*)$", EXAMPLE, flags=re.M))
     assert values["POSTGRES_PASSWORD"] == "" and values["KARTLY_API_KEY"] == ""
@@ -201,3 +209,93 @@ def test_the_smoke_script_checks_what_the_stack_promises() -> None:
         "stop worker",
     ):
         assert promise in text, promise
+
+
+# ------------------------------------------------------------------------------ the https proxy
+
+
+@pytest.fixture(scope="module")
+def proxy() -> dict[str, Any]:
+    loaded = yaml.safe_load((ROOT / "docker-compose.proxy.yml").read_text())
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+CADDYFILE = (ROOT / "deploy" / "Caddyfile").read_text()
+
+
+def test_the_proxy_starts_only_once_the_api_is_healthy(proxy: dict[str, Any]) -> None:
+    assert proxy["services"]["caddy"]["depends_on"]["api"]["condition"] == "service_healthy"
+
+
+def test_only_the_proxy_is_published_beyond_this_machine(proxy: dict[str, Any]) -> None:
+    caddy = proxy["services"]["caddy"]
+    assert {str(p) for p in caddy["ports"]} == {"80:80", "443:443", "443:443/udp"}
+    assert "ports" not in proxy["services"]["api"]
+
+
+def test_the_domain_is_required(proxy: dict[str, Any]) -> None:
+    assert proxy["services"]["caddy"]["environment"]["KARTLY_DOMAIN"].startswith(
+        "${KARTLY_DOMAIN:?"
+    )
+
+
+def test_behind_https_the_cookie_is_secure_and_the_docs_are_off(proxy: dict[str, Any]) -> None:
+    env = proxy["services"]["api"]["environment"]
+    assert env["KARTLY_COOKIE_SECURE"] == "true"
+    assert env["KARTLY_DOCS_ENABLED"] == "false"
+
+
+def test_the_proxy_container_is_locked_down(proxy: dict[str, Any]) -> None:
+    caddy = proxy["services"]["caddy"]
+    assert caddy["cap_drop"] == ["ALL"] and caddy["cap_add"] == ["NET_BIND_SERVICE"]
+    assert "no-new-privileges:true" in caddy["security_opt"]
+    assert caddy["volumes"][0].endswith(":ro")
+
+
+def test_the_caddyfile_serves_the_domain_to_the_api_with_limits_and_hsts() -> None:
+    assert "{$KARTLY_DOMAIN}" in CADDYFILE
+    assert "reverse_proxy api:8000" in CADDYFILE
+    assert "max_size" in CADDYFILE
+    assert "Strict-Transport-Security" in CADDYFILE
+    assert "http://" not in CADDYFILE  # never serve the site in clear text
+
+
+def test_the_proxy_overlay_and_caddyfile_stay_out_of_the_image() -> None:
+    assert "deploy" in IGNORE
+
+
+# ------------------------------------------------------------------------------ the guide
+
+
+GUIDE = (ROOT / "docs" / "DEPLOY.md").read_text()
+
+
+def test_the_guide_only_names_files_and_scripts_that_exist() -> None:
+    for name in set(
+        re.findall(r"(?:scripts|deploy)/[\w.-]+\.(?:sh|yml|conf)|deploy/Caddyfile", GUIDE)
+    ):
+        assert (ROOT / name).exists(), name
+    for name in set(re.findall(r"docker-compose[.\w-]*\.yml", GUIDE)):
+        assert (ROOT / name).exists(), name
+
+
+def test_the_guide_covers_what_an_operator_needs() -> None:
+    for topic in (
+        "https",
+        "Secrets",
+        "Backups",
+        "Restoring",
+        "rehearsed",
+        "Upgrading and rolling back",
+        "KARTLY_IMAGE_TAG",
+        "What this does not do",
+        "KARTLY_DOMAIN",
+    ):
+        assert topic in GUIDE, topic
+
+
+def test_every_python_module_the_guide_runs_exists() -> None:
+    for module in set(re.findall(r"python -m (kartly[\w.]*)", GUIDE)):
+        path = ROOT / "src" / module.replace(".", "/")
+        assert path.with_suffix(".py").exists() or (path / "__main__.py").exists(), module

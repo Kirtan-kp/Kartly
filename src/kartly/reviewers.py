@@ -240,7 +240,19 @@ class Reviewers:
     def set_active(self, username: str, active: bool, *, actor: str = "cli") -> None:
         now = self._clock()
         with self._factory() as session:
-            row = self._get(session, username, lock=True)
+            row = self._get(session, username)
+            if not active and row.role == "admin":
+                # Two admins disabling each other must queue up: lock every admin row, always in
+                # the same order (so they cannot deadlock), then look at the committed state.
+                session.execute(
+                    select(Reviewer.id)
+                    .where(Reviewer.role == "admin")
+                    .order_by(Reviewer.id)
+                    .with_for_update()
+                ).all()
+                session.refresh(row)
+            else:
+                row = self._get(session, username, lock=True)
             if not active and row.active and row.role == "admin":
                 admins = session.scalar(
                     select(func.count())

@@ -157,6 +157,7 @@ def create_app_from_env() -> FastAPI:
         ),
         models=_load_models(settings.models_config_path),
         cookie_secure=settings.cookie_secure,
+        docs_enabled=settings.docs_enabled,
         session_ttl_s=settings.session_ttl_s,
         alert_loop=AlertLoop(manager, settings.alert_interval_s) if manager else None,
     )

@@ -118,6 +118,7 @@ class ApiState:
     reviewers: Reviewers | None = None  # admin accounts and sessions
     models: ModelsFile | None = None  # prices for the cost report's what-if section
     cookie_secure: bool = False  # mark the session cookie Secure (https only)
+    docs_enabled: bool = True  # serve /docs, /redoc and /openapi.json (turn off when exposed)
     session_ttl_s: float = 12 * 3600.0
 
 
@@ -267,7 +268,14 @@ def create_app(state: ApiState, *, on_shutdown: Callable[[], None] | None = None
         if on_shutdown is not None:
             on_shutdown()
 
-    app = FastAPI(title="Kartly Support Agent", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Kartly Support Agent",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if state.docs_enabled else None,
+        redoc_url="/redoc" if state.docs_enabled else None,
+        openapi_url="/openapi.json" if state.docs_enabled else None,
+    )
     app.state.kartly = state
 
     @app.middleware("http")

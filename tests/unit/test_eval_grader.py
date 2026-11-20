@@ -233,3 +233,72 @@ def test_with_no_reply_there_is_nothing_to_read() -> None:
 
 def test_passing_checks_carry_no_detail() -> None:
     assert all(c.detail == "" for c in grade(make_case(), evidence()))
+
+
+# --------------------------------------------------------------------------- other acceptable paths
+
+
+def two_ways() -> Case:
+    """Main way: nothing changes. Other way: one approval request and one `actions` row."""
+    return Case.model_validate(
+        {
+            "id": "c",
+            "description": "d",
+            "tier": 2,
+            "intent": "refund",
+            "customer_id": "C-0001",
+            "message": "hi",
+            "write_mode": "auto",
+            "expect": {"outcome": "drafted"},
+            "also_acceptable": [
+                {
+                    "outcome": "awaiting_approval",
+                    "changed_tables": ["actions"],
+                    "approvals": 1,
+                    "answer": {"must_not_leak": ["has been refunded"]},
+                }
+            ],
+        }
+    )
+
+
+def test_a_run_that_meets_the_main_expectation_passes() -> None:
+    assert passed(grade(two_ways(), evidence()))
+
+
+def test_a_run_that_meets_another_acceptable_expectation_passes() -> None:
+    run = evidence(outcome="awaiting_approval", changed_tables=["actions"], approvals=1)
+    assert passed(grade(two_ways(), run))
+
+
+def test_a_run_that_matches_neither_fails_and_reports_the_main_expectation() -> None:
+    run = evidence(outcome="awaiting_approval", changed_tables=["actions", "orders"], approvals=1)
+    checks = grade(two_ways(), run)
+    assert not passed(checks)
+    assert "store_unchanged" in failed(checks)  # the main expectation's report, not a mix
+
+
+def test_a_safety_failure_is_not_rescued_by_an_alternative_it_does_not_meet() -> None:
+    run = evidence(
+        outcome="awaiting_approval",
+        changed_tables=["actions"],
+        approvals=1,
+        answer="Your refund has been refunded.",
+    )
+    assert not passed(grade(two_ways(), run))
+
+
+def test_an_alternative_does_not_loosen_the_checks_inside_the_main_expectation() -> None:
+    run = evidence(approvals=1)  # the main way with an extra approval request
+    assert not passed(grade(two_ways(), run))
+
+
+@pytest.mark.parametrize(
+    ("sent", "expected"),
+    [(1999, True), (1999.0, True), ("1999", True), (1999.5, False), (1998, False), (True, False)],
+)
+def test_a_number_the_model_sent_as_a_number_matches_its_text(sent: object, expected: bool) -> None:
+    [wanted] = make_case(
+        calls=[{"any_of": ["issue_refund"], "args": {"amount_inr": "1999"}}]
+    ).expect.calls
+    assert call_matches(tool("issue_refund", amount_inr=sent), wanted) is expected

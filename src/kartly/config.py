@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     session_ttl_s: float = 12 * 3600.0  # a session ends this long after sign-in
     session_idle_s: float = 2 * 3600.0  # ...or this long after it was last used
     cookie_secure: bool = False  # set true behind https: the cookie is then never sent over http
+    # /docs, /redoc and /openapi.json list every route and field; switch off when exposed.
+    docs_enabled: bool = True
 
 
 @lru_cache

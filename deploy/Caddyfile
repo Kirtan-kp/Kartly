@@ -1,0 +1,17 @@
+# Caddy gets and renews the https certificate by itself. KARTLY_DOMAIN must be a name that already
+# points at this machine (DNS) with ports 80 and 443 reachable from the internet.
+{$KARTLY_DOMAIN} {
+	encode zstd gzip
+
+	# The API accepts messages of at most 4,000 characters; nothing legitimate is near this size.
+	request_body {
+		max_size 64KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	reverse_proxy api:8000
+}

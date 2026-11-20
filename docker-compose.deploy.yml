@@ -6,7 +6,9 @@ name: kartly
 
 x-app: &app
   build: .
-  image: kartly:local
+  # Tag a release (KARTLY_IMAGE_TAG=$(git rev-parse --short HEAD)) so the previous image is still
+  # there to roll back to.
+  image: kartly:${KARTLY_IMAGE_TAG:-local}
   restart: unless-stopped
   init: true
   read_only: true

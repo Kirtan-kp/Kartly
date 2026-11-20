@@ -1,0 +1,6 @@
+# Shell scripts, Dockerfiles and the proxy config run on Linux: keep LF line endings on Windows too
+# (with CRLF bash fails with "set: pipefail: invalid option name").
+*.sh text eol=lf
+Dockerfile text eol=lf
+Caddyfile text eol=lf
+*.yml text eol=lf

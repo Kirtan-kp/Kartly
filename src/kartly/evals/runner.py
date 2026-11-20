@@ -122,7 +122,7 @@ def snapshot_store(session: Session) -> dict[str, str]:
 def read_state(session: Session, case: Case) -> dict[str, object]:
     """The order values a case asked to check, as they are after the run."""
     values: dict[str, object] = {}
-    for check in case.expect.state:
+    for check in [c for e in (case.expect, *case.also_acceptable) for c in e.state]:
         order = session.get(Order, check.id)
         value: object = None
         if order is not None:

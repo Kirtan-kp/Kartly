@@ -429,3 +429,19 @@ def test_the_ticket_list_refuses_bad_input(http: TestClient) -> None:
     ):
         assert http.get(f"/v1/tickets?{query}", headers=AUTH).status_code == 422, query
     assert http.get("/v1/tickets").status_code == 401
+
+
+def test_the_interactive_docs_can_be_switched_off(seeded_factory: sessionmaker[Session]) -> None:
+    on = build(seeded_factory)
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert on.get(path).status_code == 200, path
+    off = build(seeded_factory)
+    state = off.app.state.kartly  # type: ignore[attr-defined]
+    state.docs_enabled = False
+    from kartly.api import create_app
+
+    closed = TestClient(create_app(state))
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert closed.get(path).status_code == 404, path
+    assert closed.get("/admin").status_code == 200  # the admin page is not API documentation
+    assert closed.get("/healthz").status_code == 200

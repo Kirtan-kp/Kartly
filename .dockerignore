@@ -24,3 +24,5 @@ docker-compose*.yml
 Dockerfile
 build
 dist
+docs
+deploy

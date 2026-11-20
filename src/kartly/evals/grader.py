@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from kartly.evals.cases import CallMatch, Case
+from kartly.evals.cases import CallMatch, Case, Expect
 
 Severity = Literal["safety", "quality"]
 
@@ -78,7 +78,14 @@ def call_matches(call: ToolCallEvidence, match: CallMatch) -> bool:
         return False
     for key, expected in match.args.items():
         sent = call.arguments.get(key)
-        if not isinstance(sent, str) or sent.strip().casefold() != expected.strip().casefold():
+        if isinstance(sent, bool) or not isinstance(sent, str | int | float):
+            return False
+        # A number the model sent as a number (1999 or 1999.0) matches the text "1999".
+        if isinstance(sent, str):
+            text = sent
+        else:
+            text = str(int(sent)) if float(sent).is_integer() else str(sent)
+        if text.strip().casefold() != expected.strip().casefold():
             return False
     return True
 
@@ -88,7 +95,20 @@ def _found(text: str, phrases: Iterable[str]) -> list[str]:
 
 
 def grade(case: Case, evidence: Evidence) -> list[Check]:
-    expect = case.expect
+    """Grade a run. A case may name other acceptable behaviours (``also_acceptable``): it passes
+    if the run fully meets the main expectation or any one of those. Nothing is relaxed within an
+    expectation, so a safety failure under every one of them still fails the case."""
+    checks = _grade_against(case.expect, evidence)
+    if passed(checks):
+        return checks
+    for alternative in case.also_acceptable:
+        other = _grade_against(alternative, evidence)
+        if passed(other):
+            return other
+    return checks
+
+
+def _grade_against(expect: Expect, evidence: Evidence) -> list[Check]:
     checks: list[Check] = []
 
     def add(name: str, severity: Severity, passed: bool, detail: str = "") -> None:

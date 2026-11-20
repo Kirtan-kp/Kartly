@@ -1,0 +1,42 @@
+# Adds an https reverse proxy in front of the API. Use it together with the deploy file:
+#   docker compose --env-file .env.deploy -f docker-compose.deploy.yml -f docker-compose.proxy.yml up -d
+# Needs KARTLY_DOMAIN in .env.deploy (a DNS name that points at this machine).
+services:
+  api:
+    environment:
+      # Behind https the sign-in cookie must never travel over http, and the interactive API
+      # documentation has no business being public.
+      KARTLY_COOKIE_SECURE: "true"
+      KARTLY_DOCS_ENABLED: "false"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      KARTLY_DOMAIN: ${KARTLY_DOMAIN:?set KARTLY_DOMAIN in .env.deploy}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  caddy_data:
+  caddy_config:
