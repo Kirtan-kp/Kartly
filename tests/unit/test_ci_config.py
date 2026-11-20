@@ -124,3 +124,8 @@ def test_the_postgres_job_uses_a_client_that_matches_the_server() -> None:
     assert server, "the postgres service image changed shape"
     assert f"postgresql-client-{server.group(1)}" in text
     assert f"/usr/lib/postgresql/{server.group(1)}/bin" in text
+
+
+def test_the_postgres_job_runs_where_the_matching_client_can_be_installed() -> None:
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    assert jobs["postgres"]["runs-on"] == "ubuntu-24.04"  # its repositories carry the 16 client
