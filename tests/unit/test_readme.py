@@ -34,3 +34,23 @@ def test_the_status_line_is_not_stale() -> None:
 
 def test_the_front_door_states_its_limits() -> None:
     assert "## Known limits" in README and "## What is proven, and how" in README
+
+
+WRITEUP = (ROOT / "docs" / "WRITEUP.md").read_text(encoding="utf-8")
+
+
+def test_every_decision_the_writeup_cites_exists() -> None:
+    cited = {int(n) for n in re.findall(r"ADR-(\d{3})", WRITEUP)}
+    present = {int(n) for n in re.findall(r"^## ADR-(\d{3}):", DECISIONS, flags=re.M)}
+    assert cited and cited <= present, sorted(cited - present)
+
+
+def test_the_writeup_says_what_it_did_not_measure() -> None:
+    assert "## 4. What I did not do, and what is not known" in WRITEUP
+    assert "One run per case" in WRITEUP and "synthetic" in WRITEUP
+
+
+def test_the_commands_the_writeup_gives_exist() -> None:
+    for module in set(re.findall(r"python -m (kartly[\w.]*)", WRITEUP)):
+        path = ROOT / "src" / module.replace(".", "/")
+        assert path.with_suffix(".py").exists() or (path / "__main__.py").exists(), module

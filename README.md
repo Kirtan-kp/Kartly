@@ -3,7 +3,7 @@
 An agentic AI system for e-commerce customer support, built to show the engineering around the model: it triages tickets, retrieves policy, calls tools through a deterministic gateway, resolves low-risk issues on its own, and hands everything else to a person with a summary. The data is synthetic and the models are free or local (Ollama, Groq's free tier), so everything here can be run and checked for free.
 
 > **Status:** all eight weeks are built except the Week 8 write-up and demo script. The part that matters most, money safety, is measured: 15 write and red-team cases pass against a real hosted model with **0 safety failures**, and a scripted-model suite plus Postgres concurrency tests back that up. See [What is proven, and how](#what-is-proven-and-how) and [Known limits](#known-limits).
-> Try it: `python -m kartly.demo` (no key needed). Design: `DESIGN.md`. Decisions with their trade-offs: `DECISIONS.md` (ADR-001 to ADR-062). Deployment: `docs/DEPLOY.md`.
+> Try it: `python -m kartly.demo` (no key needed). Read the write-up: `docs/WRITEUP.md`. Design: `DESIGN.md`. Decisions with their trade-offs: `DECISIONS.md` (ADR-001 to ADR-062). Deployment: `docs/DEPLOY.md`.
 
 ## Try it in two minutes
 
@@ -567,7 +567,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 
 - [x] 8a: README front door: how it works, what is proven and how, known limits
 - [x] 8b: `python -m kartly.demo`, a scripted walkthrough that runs with no API key (ADR-062)
-- [ ] 8c: write-up with the measured results (repeat runs, routing comparison)
+- [x] 8c: write-up with the measured results and what was not measured (`docs/WRITEUP.md`); repeat runs of the write and red-team sets are listed there as the next measurement
 
 ## Ship gates
 
