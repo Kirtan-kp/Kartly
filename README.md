@@ -3,7 +3,24 @@
 An agentic AI system for e-commerce customer support, built to show the engineering around the model: it triages tickets, retrieves policy, calls tools through a deterministic gateway, resolves low-risk issues on its own, and hands everything else to a person with a summary. The data is synthetic and the models are free or local (Ollama, Groq's free tier), so everything here can be run and checked for free.
 
 > **Status:** all eight weeks are built except the Week 8 write-up and demo script. The part that matters most, money safety, is measured: 15 write and red-team cases pass against a real hosted model with **0 safety failures**, and a scripted-model suite plus Postgres concurrency tests back that up. See [What is proven, and how](#what-is-proven-and-how) and [Known limits](#known-limits).
-> Design: `DESIGN.md`. Decisions with their trade-offs: `DECISIONS.md` (ADR-001 to ADR-061). Deployment: `docs/DEPLOY.md`.
+> Try it: `python -m kartly.demo` (no key needed). Design: `DESIGN.md`. Decisions with their trade-offs: `DECISIONS.md` (ADR-001 to ADR-062). Deployment: `docs/DEPLOY.md`.
+
+## Try it in two minutes
+
+```bash
+python -m kartly.demo
+```
+
+No API key, no Docker, no network. Six scenes run on the real stack (injection screen, Tier 3 rules, agent loop, Tool Gateway, approvals, kill switch, audit log); only the model is a stand-in, so the output is the same every time:
+
+1. an ordinary order question gets a drafted reply;
+2. a prompt injection is stopped before any model call;
+3. a legal threat goes to a person, never to the model;
+4. a small refund (INR 599, under the INR 1,000 limit) is paid once and audited;
+5. a large refund (INR 2,898) waits for a reviewer, runs once on approval, and a second click does nothing;
+6. with the agent switched off, a new ticket goes straight to a person.
+
+The demo shows what the code around the model does, not how good the model is. For that, run the evals against a real model (see Evals). For the full local stack with the admin page, see Run it in containers; the failure-handling version is `python -m kartly.chaos`.
 
 ## How it works
 
@@ -549,7 +566,7 @@ The plan is eight weeks (DESIGN.md). Week 1 is kept in detail because it is the 
 **Week 8: polish.** README, demo, write-up.
 
 - [x] 8a: README front door: how it works, what is proven and how, known limits
-- [ ] 8b: a scripted demo that runs with no API key
+- [x] 8b: `python -m kartly.demo`, a scripted walkthrough that runs with no API key (ADR-062)
 - [ ] 8c: write-up with the measured results (repeat runs, routing comparison)
 
 ## Ship gates
